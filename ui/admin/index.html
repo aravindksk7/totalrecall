@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TotalRecall Admin</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>TotalRecall Admin</h1>
+          <p>Catalogue governance, memory deletion, learning review, and rollout state.</p>
+        </div>
+        <button id="refresh-active" type="button" class="primary-button">Refresh</button>
+      </header>
+
+      <section class="connection-band" aria-label="Backend connection">
+        <label>
+          API base
+          <input id="api-base" type="url" value="http://localhost:8000/v1" />
+        </label>
+        <label>
+          Bearer token
+          <input id="api-token" type="password" autocomplete="off" />
+        </label>
+        <label>
+          Application
+          <input id="application-id" type="text" value="app_test" />
+        </label>
+        <button id="save-connection" type="button">Save</button>
+        <output id="status-line" role="status">Disconnected</output>
+      </section>
+
+      <div class="workspace">
+        <nav class="sidebar" aria-label="Admin sections">
+          <button class="tab-button active" type="button" data-view="catalogue">Catalogue</button>
+          <button class="tab-button" type="button" data-view="memory">Memory</button>
+          <button class="tab-button" type="button" data-view="learning">Learning</button>
+          <button class="tab-button" type="button" data-view="flags">Flags</button>
+        </nav>
+
+        <main class="content">
+          <section id="view-catalogue" class="view active" aria-labelledby="catalogue-heading">
+            <div class="section-header">
+              <div>
+                <h2 id="catalogue-heading">Catalogue</h2>
+                <p>Search active, discovered, rejected, tombstoned, and deprecated entries.</p>
+              </div>
+              <form id="catalogue-form" class="toolbar">
+                <label>
+                  Category
+                  <select id="catalogue-category">
+                    <option value="">Any</option>
+                    <option value="static_skill">Static skill</option>
+                    <option value="dynamic_memory">Dynamic memory</option>
+                    <option value="learning_reference">Learning reference</option>
+                  </select>
+                </label>
+                <label>
+                  Status
+                  <select id="catalogue-status">
+                    <option value="">Any</option>
+                    <option value="active">Active</option>
+                    <option value="discovered">Discovered</option>
+                    <option value="rejected">Rejected</option>
+                    <option value="tombstoned">Tombstoned</option>
+                    <option value="deprecated">Deprecated</option>
+                  </select>
+                </label>
+                <label>
+                  Limit
+                  <input id="catalogue-limit" type="number" min="1" max="200" value="50" />
+                </label>
+                <button type="submit" class="primary-button">Search</button>
+              </form>
+            </div>
+
+            <div class="split-grid">
+              <section class="panel" aria-label="Catalogue results">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Entity</th>
+                      <th>Category</th>
+                      <th>Status</th>
+                      <th>Summary</th>
+                    </tr>
+                  </thead>
+                  <tbody id="catalogue-results">
+                    <tr>
+                      <td colspan="4" class="empty-cell">No catalogue search run yet.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </section>
+              <aside id="catalogue-detail" class="panel detail-panel">
+                <h3>Entry Detail</h3>
+                <p class="muted">Select a catalogue row.</p>
+              </aside>
+            </div>
+          </section>
+
+          <section id="view-memory" class="view" aria-labelledby="memory-heading">
+            <div class="section-header">
+              <div>
+                <h2 id="memory-heading">Memory</h2>
+                <p>Delete dynamic memories by writing a tombstone through the backend API.</p>
+              </div>
+            </div>
+            <form id="memory-delete-form" class="panel form-grid">
+              <label>
+                Entity ID
+                <input id="memory-entity-id" type="text" required />
+              </label>
+              <label>
+                Application
+                <input id="memory-application-id" type="text" required />
+              </label>
+              <label class="wide-field">
+                Reason
+                <textarea id="memory-reason" rows="4"></textarea>
+              </label>
+              <label class="check-row wide-field">
+                <input id="memory-confirm" type="checkbox" />
+                Confirm this memory should be tombstoned for the selected application.
+              </label>
+              <button id="memory-delete-button" type="submit" class="danger-button" disabled>
+                Delete Memory
+              </button>
+              <output id="memory-result" class="wide-field"></output>
+            </form>
+          </section>
+
+          <section id="view-learning" class="view" aria-labelledby="learning-heading">
+            <div class="section-header">
+              <div>
+                <h2 id="learning-heading">Learning</h2>
+                <p>Review learning runs and approve or reject discovered knowledge.</p>
+              </div>
+              <form id="learning-list-form" class="toolbar">
+                <label>
+                  Limit
+                  <input id="learning-limit" type="number" min="1" max="100" value="20" />
+                </label>
+                <button type="submit" class="primary-button">Load Runs</button>
+              </form>
+            </div>
+
+            <form id="learning-trigger-form" class="panel form-grid compact-form">
+              <label>
+                Repository
+                <input id="learning-repository" type="text" value="local" />
+              </label>
+              <label>
+                Branch
+                <input id="learning-branch" type="text" value="main" />
+              </label>
+              <label class="wide-field">
+                Path
+                <input id="learning-path" type="text" placeholder="C:\\path\\to\\approved\\tests" />
+              </label>
+              <label>
+                Framework
+                <select id="learning-framework">
+                  <option value="">Any</option>
+                  <option value="playwright">Playwright</option>
+                  <option value="pytest">Pytest</option>
+                  <option value="junit">JUnit</option>
+                  <option value="testng">TestNG</option>
+                </select>
+              </label>
+              <label>
+                Domain
+                <input id="learning-domain" type="text" />
+              </label>
+              <button type="submit" class="secondary-button">Trigger Run</button>
+            </form>
+
+            <div id="learning-runs" class="run-list" aria-live="polite">
+              <p class="muted">No learning runs loaded.</p>
+            </div>
+          </section>
+
+          <section id="view-flags" class="view" aria-labelledby="flags-heading">
+            <div class="section-header">
+              <div>
+                <h2 id="flags-heading">Flags</h2>
+                <p>Current feature flag snapshot and generation counters.</p>
+              </div>
+              <button id="load-flags" type="button" class="primary-button">Load State</button>
+            </div>
+            <div class="split-grid">
+              <section class="panel">
+                <h3>Feature Flags</h3>
+                <dl id="flag-list" class="key-value-list">
+                  <div><dt>memory.adapter</dt><dd>Not loaded</dd></div>
+                </dl>
+              </section>
+              <section class="panel">
+                <h3>Metrics</h3>
+                <dl id="metric-list" class="key-value-list">
+                  <div><dt>generations_total</dt><dd>Not loaded</dd></div>
+                </dl>
+              </section>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script type="module" src="./dist/app.js"></script>
+  </body>
+</html>

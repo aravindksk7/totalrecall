@@ -1,0 +1,15 @@
+{
+  "name": "@totalrecall/admin-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Static TotalRecall governance admin UI.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "serve": "python -m http.server 4173"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  }
+}

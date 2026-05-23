@@ -1,0 +1,17 @@
+{
+  "request_id": "validation_sample",
+  "artifacts": [
+    {
+      "path": "pages/login.page.ts",
+      "language": "typescript",
+      "artifact_type": "page_object",
+      "content": "import { Page, Locator } from '@playwright/test';\n\nexport class LoginPage {\n  readonly username: Locator;\n\n  constructor(private readonly page: Page) {\n    this.username = page.getByLabel('Username');\n  }\n}\n"
+    },
+    {
+      "path": "tests/login.spec.ts",
+      "language": "typescript",
+      "artifact_type": "test_spec",
+      "content": "import { test, expect } from '@playwright/test';\n\ntest('login', async ({ page }) => {\n  await page.goto('/login');\n  await expect(page.getByRole('heading', { name: 'Login' })).toBeVisible();\n});\n"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+# Local development overrides for docker-compose.yml.
+# This file is automatically merged by Docker Compose when you run `docker compose up`.
+# It adds volume mounts for hot-reload and relaxed settings suited to a local dev workflow.
+# Do NOT commit secrets or personal access tokens to this file.
+
+services:
+  app:
+    build:
+      context: .
+      target: runtime
+    volumes:
+      # Mount application source for hot-reload (uvicorn --reload watches these paths)
+      - ./totalrecall:/app/totalrecall:ro
+      - ./skills:/app/skills:ro
+      - ./migrations:/app/migrations:ro
+    environment:
+      TOTALRECALL_ENVIRONMENT: development
+    command:
+      [
+        "sh",
+        "-c",
+        "uv run python -m totalrecall.storage.migrations && uv run uvicorn totalrecall.main:app --host 0.0.0.0 --port 8000 --reload",
+      ]
+  memory-wrapper:
+    volumes:
+      - ./totalrecall:/app/totalrecall:ro
+      - ./migrations:/app/migrations:ro
+    environment:
+      TOTALRECALL_ENVIRONMENT: development
+    command:
+      [
+        "sh",
+        "-c",
+        "uv run python -m totalrecall.storage.migrations && uv run uvicorn totalrecall.memory.service_app:app --host 0.0.0.0 --port 8001 --reload",
+      ]

@@ -1,0 +1,47 @@
+{
+  "skill_id": "pytest-python-pom",
+  "version": "1.0.0",
+  "language": "python",
+  "framework": "pytest",
+  "pattern": "pom",
+  "supported_locator_strategies": ["page_file", "central_module"],
+  "output_files": [
+    {
+      "artifact_type": "page_object",
+      "path_template": "pages/{domain}/{route}_page.py",
+      "template_ref": "pytest/page_object.py"
+    },
+    {
+      "artifact_type": "test_spec",
+      "path_template": "tests/{domain}/test_{route}.py",
+      "template_ref": "pytest/test_spec.py"
+    },
+    {
+      "artifact_type": "fixture",
+      "path_template": "tests/conftest.py",
+      "template_ref": "pytest/conftest.py"
+    }
+  ],
+  "generation_rules": [
+    "Use Page Object Model with a dedicated class per page",
+    "Define locators as class attributes using Playwright locator strings",
+    "Use pytest fixtures for browser setup and page object construction",
+    "Parametrize test cases where multiple input variants are needed",
+    "Test function names must be prefixed with test_",
+    "Use sync_playwright by default; use async_playwright only if the caller requests async",
+    "Import page fixtures from conftest.py; do not instantiate Page directly in tests",
+    "Return the full generated content inside a JSON artifact block"
+  ],
+  "validators": [
+    {
+      "type": "structure",
+      "rules": ["page_object_class_required", "pytest_test_functions_required"]
+    },
+    {
+      "type": "syntax",
+      "command": "python -m py_compile"
+    }
+  ],
+  "status": "active",
+  "description": "Pytest Python POM: generates page objects, test specs, and fixtures using POM pattern with Playwright"
+}

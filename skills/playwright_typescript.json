@@ -1,0 +1,42 @@
+{
+  "skill_id": "playwright-typescript-pom",
+  "version": "1.0.0",
+  "language": "typescript",
+  "framework": "playwright",
+  "pattern": "pom",
+  "supported_locator_strategies": ["page_file", "central_module"],
+  "output_files": [
+    {
+      "artifact_type": "page_object",
+      "path_template": "pages/{domain}/{route}.page.ts",
+      "template_ref": "playwright/page_object.ts"
+    },
+    {
+      "artifact_type": "test_spec",
+      "path_template": "tests/{domain}/{route}.spec.ts",
+      "template_ref": "playwright/test_spec.ts"
+    }
+  ],
+  "generation_rules": [
+    "Use Page Object Model pattern with a dedicated class per page",
+    "Define locators in the constructor using Playwright locator methods (getByRole, getByTestId, getByLabel)",
+    "Prefer data-testid attributes over CSS selectors or XPath",
+    "Keep test specs focused on user workflows, not implementation details",
+    "Use beforeEach for common setup; avoid beforeAll for shared mutable state",
+    "All Playwright actions must be async/await",
+    "Export the page object class as a named export",
+    "Return the full generated content inside a JSON artifact block"
+  ],
+  "validators": [
+    {
+      "type": "structure",
+      "rules": ["page_object_class_required", "locator_in_constructor_required"]
+    },
+    {
+      "type": "syntax",
+      "command": "tsc --noEmit"
+    }
+  ],
+  "status": "active",
+  "description": "Playwright TypeScript POM: generates page objects and test specs using Page Object Model with Playwright locators"
+}
