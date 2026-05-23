@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+.env
+local-secrets/
+
+# Local assistant, IDE, and repo-private metadata
+.claude/
+.claudee/
+.code-review-graph/
+.cursor/
+.github/
+.kiro/
+docs/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
