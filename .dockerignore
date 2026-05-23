@@ -4,4 +4,13 @@ __pycache__
 .pytest_cache
 .ruff_cache
 *.pyc
+.env
+.claude
+.code-review-graph
+.cursor
+.kiro
+local-secrets
+node_modules
+**/node_modules
+npm-debug.log
 docs

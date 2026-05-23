@@ -13,13 +13,31 @@ def test_initial_counters_are_zero() -> None:
 
 def test_record_completed_generation() -> None:
     m = GenerationMetrics()
-    m.record_generation(completed=True, input_tokens=100, output_tokens=50)
+    m.record_generation(
+        completed=True,
+        input_tokens=100,
+        output_tokens=50,
+        estimated_tokens_saved=25,
+        context_plan_id="plan_1",
+        baseline_input_tokens=125,
+        selected_skill_count=1,
+        selected_memory_count=2,
+        excluded_memory_count=3,
+        max_input_tokens=1000,
+    )
     snap = m.snapshot()
     assert snap["generations_total"] == 1
     assert snap["generations_completed"] == 1
     assert snap["generations_failed"] == 0
     assert snap["input_tokens_total"] == 100
     assert snap["output_tokens_total"] == 50
+    assert snap["estimated_tokens_saved_total"] == 25
+    assert snap["last_context_plan_id"] == "plan_1"
+    assert snap["last_token_savings_percent"] == 20.0
+    assert snap["last_selected_skill_count"] == 1
+    assert snap["last_selected_memory_count"] == 2
+    assert snap["last_excluded_memory_count"] == 3
+    assert snap["last_max_input_tokens"] == 1000
 
 
 def test_record_failed_generation() -> None:

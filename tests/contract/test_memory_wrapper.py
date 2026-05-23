@@ -45,6 +45,10 @@ def test_stub_adapter_searches_by_tenant_application_and_filter() -> None:
 
     assert result.adapter_version == "stub"
     assert [entry.entity_id for entry in result.items] == ["mem_login"]
+    stats = wrapper.operation_stats()
+    assert stats["search_total"] == 1
+    assert stats["search_success_total"] == 1
+    assert stats["search_failure_total"] == 0
 
 
 def test_stub_adapter_upserts_gets_and_deletes_memory() -> None:
@@ -88,6 +92,10 @@ def test_stub_adapter_upserts_gets_and_deletes_memory() -> None:
         )
         is None
     )
+    stats = wrapper.operation_stats()
+    assert stats["upsert_total"] == 1
+    assert stats["get_total"] == 2
+    assert stats["delete_total"] == 1
 
 
 def test_null_adapter_provides_degraded_empty_memory_path() -> None:

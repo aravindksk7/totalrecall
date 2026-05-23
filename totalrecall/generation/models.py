@@ -92,7 +92,10 @@ class GenerationRequest(ContractModel):
     provider: ProviderSelection = Field(default_factory=ProviderSelection)
     options: GenerationOptions = Field(default_factory=GenerationOptions)
     jira_key: str | None = Field(default=None, description="JIRA issue key, e.g. PROJ-123")
-    test_types: list[TestType] | None = Field(default=None, description="Override test type routing")
+    test_types: list[TestType] | None = Field(
+        default=None,
+        description="Override test type routing",
+    )
 
 
 class GeneratedArtifact(ContractModel):
@@ -120,7 +123,11 @@ class GenerationContextMetadata(ContractModel):
     skill_ids: list[str] = Field(default_factory=list)
     memory_ids: list[str] = Field(default_factory=list)
     estimated_input_tokens: int = Field(default=0, ge=0)
+    baseline_input_tokens: int = Field(default=0, ge=0)
     estimated_tokens_saved: int = Field(default=0, ge=0)
+    token_savings_percent: float = Field(default=0.0, ge=0.0)
+    excluded_memory_count: int = Field(default=0, ge=0)
+    max_input_tokens: int = Field(default=0, ge=0)
 
 
 class GenerationResult(ContractModel):

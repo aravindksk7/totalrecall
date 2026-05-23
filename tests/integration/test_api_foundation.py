@@ -32,3 +32,18 @@ def test_flags_endpoint_returns_request_scoped_snapshot(client) -> None:
     assert body["tenant_id"] == "tenant_test"
     assert body["flags"]["values"]["memory.adapter"] == "stub"
     assert body["request_id"]
+
+
+def test_authenticated_api_allows_admin_ui_cors_preflight(client) -> None:
+    response = client.options(
+        "/v1/monitoring/summary",
+        headers={
+            "Origin": "http://localhost:4173",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "Authorization",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:4173"
+    assert "Authorization" in response.headers["access-control-allow-headers"]

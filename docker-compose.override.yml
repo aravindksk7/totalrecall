@@ -15,21 +15,13 @@ services:
       - ./migrations:/app/migrations:ro
     environment:
       TOTALRECALL_ENVIRONMENT: development
-    command:
-      [
-        "sh",
-        "-c",
-        "uv run python -m totalrecall.storage.migrations && uv run uvicorn totalrecall.main:app --host 0.0.0.0 --port 8000 --reload",
-      ]
+      TOTALRECALL_UVICORN_RELOAD: "true"
+    command: ["api"]
   memory-wrapper:
     volumes:
       - ./totalrecall:/app/totalrecall:ro
       - ./migrations:/app/migrations:ro
     environment:
       TOTALRECALL_ENVIRONMENT: development
-    command:
-      [
-        "sh",
-        "-c",
-        "uv run python -m totalrecall.storage.migrations && uv run uvicorn totalrecall.memory.service_app:app --host 0.0.0.0 --port 8001 --reload",
-      ]
+      TOTALRECALL_UVICORN_RELOAD: "true"
+    command: ["memory-wrapper"]

@@ -6,6 +6,7 @@ DELETE_MEMORY = "memory:delete"
 PROMOTE_LEARNING = "learning:promote"
 WRITE_MEMORY = "memory:write"
 PUBLISH_SKILL = "skill:publish"
+MANAGE_CREDENTIALS = "credential:manage"
 
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "reader": frozenset({READ_CATALOGUE}),
@@ -19,6 +20,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             PROMOTE_LEARNING,
             WRITE_MEMORY,
             PUBLISH_SKILL,
+            MANAGE_CREDENTIALS,
         }
     ),
 }

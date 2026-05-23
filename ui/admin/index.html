@@ -11,7 +11,7 @@
       <header class="topbar">
         <div>
           <h1>TotalRecall Admin</h1>
-          <p>Catalogue governance, memory deletion, learning review, and rollout state.</p>
+          <p>Prompt orchestration, catalogue governance, memory deletion, learning review, and rollout state.</p>
         </div>
         <button id="refresh-active" type="button" class="primary-button">Refresh</button>
       </header>
@@ -23,7 +23,11 @@
         </label>
         <label>
           Bearer token
-          <input id="api-token" type="password" autocomplete="off" />
+          <input id="api-token" type="password" autocomplete="off" placeholder="Docker: dev-token" />
+        </label>
+        <label>
+          Tenant
+          <input id="tenant-id" type="text" value="tenant_dev" />
         </label>
         <label>
           Application
@@ -35,6 +39,9 @@
 
       <div class="workspace">
         <nav class="sidebar" aria-label="Admin sections">
+          <button class="tab-button" type="button" data-view="generate">Generate</button>
+          <button class="tab-button" type="button" data-view="credentials">Credentials</button>
+          <button class="tab-button" type="button" data-view="monitoring">Monitoring</button>
           <button class="tab-button active" type="button" data-view="catalogue">Catalogue</button>
           <button class="tab-button" type="button" data-view="memory">Memory</button>
           <button class="tab-button" type="button" data-view="learning">Learning</button>
@@ -42,6 +49,253 @@
         </nav>
 
         <main class="content">
+          <section id="view-generate" class="view" aria-labelledby="generate-heading">
+            <div class="section-header">
+              <div>
+                <h2 id="generate-heading">Generate</h2>
+                <p>Submit a prompt and let TotalRecall assemble skills, memory, Jira, RAG, and validation.</p>
+              </div>
+            </div>
+
+            <form id="generation-form" class="panel form-grid">
+              <label class="wide-field">
+                Prompt
+                <textarea
+                  id="generation-prompt"
+                  rows="5"
+                  required
+                  placeholder="Generate negative and edge case test cases for login validation."
+                ></textarea>
+              </label>
+              <label>
+                Jira key
+                <input id="generation-jira-key" type="text" placeholder="SCRUM-5" />
+              </label>
+              <label>
+                Domain
+                <input id="generation-domain" type="text" value="auth" required />
+              </label>
+              <label>
+                Route
+                <input id="generation-route" type="text" placeholder="/login" />
+              </label>
+              <label>
+                Tags
+                <input id="generation-tags" type="text" placeholder="smoke, login" />
+              </label>
+              <label>
+                Language
+                <select id="generation-language">
+                  <option value="typescript">TypeScript</option>
+                  <option value="python">Python</option>
+                  <option value="java">Java</option>
+                </select>
+              </label>
+              <label>
+                Framework
+                <select id="generation-framework">
+                  <option value="playwright">Playwright</option>
+                  <option value="pytest">Pytest</option>
+                  <option value="junit">JUnit</option>
+                  <option value="testng">TestNG</option>
+                </select>
+              </label>
+              <label>
+                Locator strategy
+                <select id="generation-locator">
+                  <option value="page_file">Page file</option>
+                  <option value="central_module">Central module</option>
+                  <option value="external_store">External store</option>
+                </select>
+              </label>
+              <label>
+                Provider
+                <input id="generation-provider" type="text" value="stub" />
+              </label>
+              <label>
+                Model
+                <input id="generation-model" type="text" value="stub" />
+              </label>
+              <label>
+                Max input tokens
+                <input id="generation-max-input-tokens" type="number" min="1" value="12000" />
+              </label>
+              <fieldset class="wide-field check-group">
+                <legend>Test types</legend>
+                <label class="check-row">
+                  <input type="checkbox" data-generation-test-type value="functional" />
+                  Functional
+                </label>
+                <label class="check-row">
+                  <input type="checkbox" data-generation-test-type value="negative" />
+                  Negative
+                </label>
+                <label class="check-row">
+                  <input type="checkbox" data-generation-test-type value="edge_case" />
+                  Edge case
+                </label>
+                <label class="check-row">
+                  <input type="checkbox" data-generation-test-type value="api" />
+                  API
+                </label>
+                <label class="check-row">
+                  <input type="checkbox" data-generation-test-type value="regression" />
+                  Regression
+                </label>
+              </fieldset>
+              <label class="check-row">
+                <input id="generation-validate" type="checkbox" checked />
+                Validate generated artifacts
+              </label>
+              <label class="check-row">
+                <input id="generation-allow-repair" type="checkbox" />
+                Allow one repair pass
+              </label>
+              <div class="wide-field action-row">
+                <button type="submit" class="primary-button">Generate</button>
+              </div>
+            </form>
+
+            <section id="generation-result" class="panel result-panel" aria-live="polite">
+              <p class="muted">No generation run yet.</p>
+            </section>
+          </section>
+
+          <section id="view-credentials" class="view" aria-labelledby="credentials-heading">
+            <div class="section-header">
+              <div>
+                <h2 id="credentials-heading">Credentials</h2>
+                <p>Store local provider tokens for generation, local LLMs, Jira, and Mem0 memory.</p>
+              </div>
+              <button id="load-credentials" type="button" class="primary-button">Load Credentials</button>
+            </div>
+
+            <form id="credential-form" class="panel form-grid">
+              <label>
+                Platform token
+                <select id="credential-key">
+                  <option value="mem0_api_key">Mem0 API Key</option>
+                  <option value="openai_api_key">OpenAI API Key</option>
+                  <option value="anthropic_api_key">Claude / Anthropic API Key</option>
+                  <option value="gemini_api_key">Gemini API Key</option>
+                  <option value="local_llm_base_url">Local LLM Base URL</option>
+                  <option value="local_llm_api_key">Local LLM API Key</option>
+                  <option value="jira_api_token">Jira API Token</option>
+                </select>
+              </label>
+              <label>
+                Value
+                <input id="credential-value" type="password" autocomplete="off" required />
+              </label>
+              <label class="check-row wide-field">
+                <input id="credential-activate" type="checkbox" />
+                Apply linked runtime defaults when available.
+              </label>
+              <div class="wide-field action-row">
+                <button type="submit" class="primary-button">Save Credential</button>
+              </div>
+            </form>
+
+            <section class="panel credential-panel">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Platform</th>
+                    <th>Credential</th>
+                    <th>Status</th>
+                    <th>Integration</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="credential-results">
+                  <tr>
+                    <td colspan="5" class="empty-cell">No credential status loaded.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </section>
+          </section>
+
+          <section id="view-monitoring" class="view" aria-labelledby="monitoring-heading">
+            <div class="section-header">
+              <div>
+                <h2 id="monitoring-heading">Monitoring</h2>
+                <p>Live health, memory activity, provider readiness, and token-efficiency signals.</p>
+              </div>
+              <div class="toolbar">
+                <label>
+                  Auto refresh
+                  <select id="monitoring-refresh-interval">
+                    <option value="0">Off</option>
+                    <option value="5000">5 seconds</option>
+                    <option value="15000">15 seconds</option>
+                    <option value="60000">60 seconds</option>
+                  </select>
+                </label>
+                <button id="load-monitoring" type="button" class="primary-button">Load Monitoring</button>
+              </div>
+            </div>
+
+            <section id="monitoring-status-cards" class="monitoring-grid" aria-live="polite">
+              <article class="metric-card">
+                <span class="metric-label">System</span>
+                <strong>Not loaded</strong>
+              </article>
+              <article class="metric-card">
+                <span class="metric-label">Memory</span>
+                <strong>Not loaded</strong>
+              </article>
+              <article class="metric-card">
+                <span class="metric-label">Mem0</span>
+                <strong>Not loaded</strong>
+              </article>
+              <article class="metric-card">
+                <span class="metric-label">Tokens saved</span>
+                <strong>Not loaded</strong>
+              </article>
+            </section>
+
+            <div class="split-grid monitoring-panels">
+              <section class="panel detail-panel">
+                <h3>Memory Health</h3>
+                <dl id="monitoring-memory-list" class="key-value-list">
+                  <div><dt>active_adapter</dt><dd>Not loaded</dd></div>
+                </dl>
+              </section>
+              <section class="panel detail-panel">
+                <h3>Token Efficiency</h3>
+                <dl id="monitoring-token-list" class="key-value-list">
+                  <div><dt>last_context_plan_id</dt><dd>Not loaded</dd></div>
+                </dl>
+              </section>
+            </div>
+
+            <section class="panel monitoring-table-panel">
+              <h3>Provider Health</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Provider</th>
+                    <th>Status</th>
+                    <th>Credential</th>
+                    <th>Latency</th>
+                    <th>Error</th>
+                  </tr>
+                </thead>
+                <tbody id="monitoring-provider-results">
+                  <tr>
+                    <td colspan="5" class="empty-cell">No provider health loaded.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </section>
+
+            <section class="panel detail-panel monitoring-raw-panel">
+              <h3>Raw Diagnostics</h3>
+              <pre id="monitoring-raw">No monitoring snapshot loaded.</pre>
+            </section>
+          </section>
+
           <section id="view-catalogue" class="view active" aria-labelledby="catalogue-heading">
             <div class="section-header">
               <div>

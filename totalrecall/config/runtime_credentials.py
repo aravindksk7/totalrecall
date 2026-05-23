@@ -1,0 +1,216 @@
+import json
+import os
+import stat
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from totalrecall.config.credentials import CredentialNotFoundError
+
+
+@dataclass(frozen=True)
+class RuntimeCredentialDefinition:
+    key: str
+    label: str
+    platform: str
+    usage: str
+    provider_id: str | None = None
+    memory_adapter: str | None = None
+    env_var: str | None = None
+    secret: bool = True
+    notes: str = ""
+
+
+SUPPORTED_RUNTIME_CREDENTIALS: tuple[RuntimeCredentialDefinition, ...] = (
+    RuntimeCredentialDefinition(
+        key="mem0_api_key",
+        label="Mem0 API Key",
+        platform="mem0",
+        usage="Long-term memory search, get, upsert, and delete through mem0ai/mem0.",
+        memory_adapter="mem0_v1",
+        env_var="MEM0_API_KEY",
+    ),
+    RuntimeCredentialDefinition(
+        key="openai_api_key",
+        label="OpenAI API Key",
+        platform="openai",
+        usage="OpenAI generation provider and pgvector RAG embedding.",
+        provider_id="openai",
+        env_var="OPENAI_API_KEY",
+    ),
+    RuntimeCredentialDefinition(
+        key="anthropic_api_key",
+        label="Claude / Anthropic API Key",
+        platform="claude",
+        usage="Stored for Claude provider adapters and external secret-manager parity.",
+        provider_id="claude",
+        env_var="ANTHROPIC_API_KEY",
+        notes="Provider adapter is not registered in this build.",
+    ),
+    RuntimeCredentialDefinition(
+        key="gemini_api_key",
+        label="Gemini API Key",
+        platform="gemini",
+        usage="Stored for Gemini provider adapters and external secret-manager parity.",
+        provider_id="gemini",
+        env_var="GEMINI_API_KEY",
+        notes="Provider adapter is not registered in this build.",
+    ),
+    RuntimeCredentialDefinition(
+        key="local_llm_base_url",
+        label="Local LLM Base URL",
+        platform="local",
+        usage="Ollama-compatible local provider endpoint, for example http://localhost:11434.",
+        provider_id="local",
+        env_var="LOCAL_LLM_BASE_URL",
+        secret=False,
+    ),
+    RuntimeCredentialDefinition(
+        key="local_llm_api_key",
+        label="Local LLM API Key",
+        platform="local",
+        usage="Optional bearer token for a protected local/self-hosted LLM endpoint.",
+        provider_id="local",
+        env_var="LOCAL_LLM_API_KEY",
+    ),
+    RuntimeCredentialDefinition(
+        key="jira_api_token",
+        label="Jira API Token",
+        platform="jira",
+        usage="Jira Cloud story and acceptance-criteria retrieval.",
+        env_var="JIRA_API_TOKEN",
+    ),
+)
+
+SUPPORTED_RUNTIME_CREDENTIALS_BY_KEY = {
+    definition.key: definition for definition in SUPPORTED_RUNTIME_CREDENTIALS
+}
+
+
+class RuntimeCredentialStore:
+    """Stores local runtime credential values without returning secrets to callers."""
+
+    _MANIFEST_NAME = "runtime_credentials.json"
+
+    def __init__(self, local_secrets_dir: Path) -> None:
+        self._local_secrets_dir = local_secrets_dir
+        self._manifest_path = local_secrets_dir / self._MANIFEST_NAME
+
+    def definitions(self) -> tuple[RuntimeCredentialDefinition, ...]:
+        return SUPPORTED_RUNTIME_CREDENTIALS
+
+    def list_statuses(self) -> list[dict[str, Any]]:
+        manifest = self._read_manifest()
+        statuses: list[dict[str, Any]] = []
+        for definition in SUPPORTED_RUNTIME_CREDENTIALS:
+            record = manifest.get(definition.key, {})
+            configured = self.has(definition.key)
+            statuses.append(
+                {
+                    "key": definition.key,
+                    "label": definition.label,
+                    "platform": definition.platform,
+                    "usage": definition.usage,
+                    "provider_id": definition.provider_id,
+                    "memory_adapter": definition.memory_adapter,
+                    "env_var": definition.env_var,
+                    "secret": definition.secret,
+                    "configured": configured,
+                    "ref": f"local:{definition.key}" if configured else None,
+                    "updated_at": record.get("updated_at") if configured else None,
+                    "notes": definition.notes,
+                }
+            )
+        return statuses
+
+    def has(self, key: str) -> bool:
+        definition = self._definition(key)
+        return self._secret_path(definition).is_file()
+
+    def get(self, key: str) -> str:
+        definition = self._definition(key)
+        path = self._secret_path(definition)
+        if not path.is_file():
+            raise CredentialNotFoundError(f"Runtime credential {key} is not configured.")
+        value = path.read_text(encoding="utf-8").strip()
+        if not value:
+            raise CredentialNotFoundError(f"Runtime credential {key} is empty.")
+        return value
+
+    def upsert(self, key: str, value: str) -> dict[str, Any]:
+        definition = self._definition(key)
+        clean_value = value.strip()
+        if not clean_value:
+            raise ValueError("Credential value must not be empty.")
+
+        self._local_secrets_dir.mkdir(parents=True, exist_ok=True)
+        path = self._secret_path(definition)
+        path.write_text(clean_value + "\n", encoding="utf-8")
+        _restrict_file_permissions(path)
+
+        manifest = self._read_manifest()
+        now = datetime.now(UTC).isoformat()
+        manifest[definition.key] = {
+            "ref": f"local:{definition.key}",
+            "updated_at": now,
+        }
+        self._write_manifest(manifest)
+        return {
+            "key": definition.key,
+            "configured": True,
+            "ref": f"local:{definition.key}",
+            "updated_at": now,
+        }
+
+    def delete(self, key: str) -> dict[str, Any]:
+        definition = self._definition(key)
+        path = self._secret_path(definition)
+        if path.exists():
+            path.unlink()
+        manifest = self._read_manifest()
+        manifest.pop(definition.key, None)
+        self._write_manifest(manifest)
+        return {"key": definition.key, "configured": False}
+
+    def _definition(self, key: str) -> RuntimeCredentialDefinition:
+        definition = SUPPORTED_RUNTIME_CREDENTIALS_BY_KEY.get(key)
+        if definition is None:
+            raise KeyError(f"Unsupported runtime credential: {key}")
+        return definition
+
+    def _secret_path(self, definition: RuntimeCredentialDefinition) -> Path:
+        return self._local_secrets_dir / definition.key
+
+    def _read_manifest(self) -> dict[str, dict[str, Any]]:
+        if not self._manifest_path.is_file():
+            return {}
+        try:
+            payload = json.loads(self._manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+        credentials = payload.get("credentials") if isinstance(payload, dict) else None
+        return credentials if isinstance(credentials, dict) else {}
+
+    def _write_manifest(self, credentials: dict[str, dict[str, Any]]) -> None:
+        self._local_secrets_dir.mkdir(parents=True, exist_ok=True)
+        self._manifest_path.write_text(
+            json.dumps({"credentials": credentials}, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        _restrict_file_permissions(self._manifest_path)
+
+
+class RuntimeCredentialProvider:
+    def __init__(self, store: RuntimeCredentialStore) -> None:
+        self._store = store
+
+    def get(self, key: str) -> str:
+        return self._store.get(key)
+
+
+def _restrict_file_permissions(path: Path) -> None:
+    try:
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass

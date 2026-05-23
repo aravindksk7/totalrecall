@@ -7,11 +7,11 @@ from totalrecall.api.dependencies import (
     get_optional_context_snapshot_repo,
     get_tenant_context,
 )
-from totalrecall.ratelimit.provider import RateLimitProvider
 from totalrecall.auth.models import TenantContext
 from totalrecall.generation.models import GenerationRequest, GenerationResult, GenerationStatus
 from totalrecall.generation.orchestrator import GenerationOrchestrator
 from totalrecall.observability.metrics import GenerationMetrics
+from totalrecall.ratelimit.provider import RateLimitProvider
 from totalrecall.storage.audit_repo import PostgresAuditRepository
 from totalrecall.storage.context_repo import PostgresContextSnapshotRepository
 
@@ -64,7 +64,11 @@ def create_generation(
             audit_repo.record,
             tenant_id=context.tenant_id,
             actor_id=context.actor_id,
-            event_type="generation.completed" if result.status.value == "completed" else "generation.failed",
+            event_type=(
+                "generation.completed"
+                if result.status.value == "completed"
+                else "generation.failed"
+            ),
             subject_type="generation",
             subject_id=body.application_id,
             details={
@@ -90,6 +94,13 @@ def create_generation(
         m.record_generation(
             completed=result.status == GenerationStatus.COMPLETED,
             input_tokens=result.context.estimated_input_tokens,
+            estimated_tokens_saved=result.context.estimated_tokens_saved,
+            context_plan_id=result.context.context_plan_id,
+            baseline_input_tokens=result.context.baseline_input_tokens,
+            selected_skill_count=len(result.context.skill_ids),
+            selected_memory_count=len(result.context.memory_ids),
+            excluded_memory_count=result.context.excluded_memory_count,
+            max_input_tokens=result.context.max_input_tokens,
         )
         m.record_validation(status=result.validation.status.value)
 

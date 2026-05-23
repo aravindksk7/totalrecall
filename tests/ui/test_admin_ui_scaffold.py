@@ -32,7 +32,16 @@ def test_admin_index_exposes_required_governance_views() -> None:
     html = (ADMIN_UI / "index.html").read_text(encoding="utf-8")
 
     assert './dist/app.js' in html
-    for view in ("catalogue", "memory", "learning", "flags"):
+    views = (
+        "generate",
+        "credentials",
+        "monitoring",
+        "catalogue",
+        "memory",
+        "learning",
+        "flags",
+    )
+    for view in views:
         assert f'data-view="{view}"' in html
         assert f'id="view-{view}"' in html
 
@@ -41,6 +50,9 @@ def test_admin_ui_calls_backend_apis_not_storage_directly() -> None:
     source = (ADMIN_UI / "src" / "app.ts").read_text(encoding="utf-8")
 
     for endpoint in (
+        "/generations",
+        "/credentials",
+        "/monitoring/summary",
         "/catalogue",
         "/memories/",
         "/learning/runs",
@@ -61,3 +73,77 @@ def test_memory_delete_requires_explicit_confirmation() -> None:
     assert 'id="memory-delete-button"' in html
     assert "confirmed" in source
     assert 'method: "DELETE"' in source
+
+
+def test_generation_form_posts_to_orchestrator_endpoint() -> None:
+    html = (ADMIN_UI / "index.html").read_text(encoding="utf-8")
+    source = (ADMIN_UI / "src" / "app.ts").read_text(encoding="utf-8")
+
+    for element_id in (
+        "generation-form",
+        "generation-prompt",
+        "generation-jira-key",
+        "generation-domain",
+        "generation-result",
+    ):
+        assert f'id="{element_id}"' in html
+
+    assert "/generations" in source
+    assert "selectedTestTypes" in source
+    assert "renderGenerationResult" in source
+
+
+def test_credentials_form_manages_runtime_provider_tokens() -> None:
+    html = (ADMIN_UI / "index.html").read_text(encoding="utf-8")
+    source = (ADMIN_UI / "src" / "app.ts").read_text(encoding="utf-8")
+
+    for element_id in (
+        "credential-form",
+        "credential-key",
+        "credential-value",
+        "credential-activate",
+        "credential-results",
+    ):
+        assert f'id="{element_id}"' in html
+
+    for credential_key in (
+        "mem0_api_key",
+        "openai_api_key",
+        "anthropic_api_key",
+        "gemini_api_key",
+        "local_llm_base_url",
+    ):
+        assert credential_key in html
+
+    assert "/credentials" in source
+    assert "saveRuntimeCredential" in source
+    assert "renderCredentials" in source
+
+
+def test_monitoring_view_loads_mem0_and_token_efficiency_state() -> None:
+    html = (ADMIN_UI / "index.html").read_text(encoding="utf-8")
+    source = (ADMIN_UI / "src" / "app.ts").read_text(encoding="utf-8")
+
+    for element_id in (
+        "load-monitoring",
+        "monitoring-refresh-interval",
+        "monitoring-status-cards",
+        "monitoring-memory-list",
+        "monitoring-token-list",
+        "monitoring-provider-results",
+        "monitoring-raw",
+    ):
+        assert f'id="{element_id}"' in html
+
+    assert "/monitoring/summary" in source
+    assert "renderMonitoring" in source
+    assert "updateMonitoringRefresh" in source
+
+
+def test_admin_ui_requires_token_before_authenticated_requests() -> None:
+    html = (ADMIN_UI / "index.html").read_text(encoding="utf-8")
+    source = (ADMIN_UI / "src" / "app.ts").read_text(encoding="utf-8")
+
+    assert 'placeholder="Docker: dev-token"' in html
+    assert "requiresBearerToken" in source
+    assert "Bearer token is required" in source

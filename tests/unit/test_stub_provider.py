@@ -35,6 +35,28 @@ def test_stub_provider_returns_deterministic_json_artifact() -> None:
     assert "content" in artifact
 
 
+def test_stub_provider_returns_test_case_pack_when_schema_requests_it() -> None:
+    request = ProviderRequest(
+        request_id="req_pack",
+        tenant_id="tenant_test",
+        messages=[
+            ProviderMessage(
+                role=ProviderRole.SYSTEM,
+                content='Respond with JSON containing "story_summary" and "test_cases".',
+            ),
+            ProviderMessage(role=ProviderRole.USER, content="Generate negative login cases."),
+        ],
+        config=ProviderConfig(provider_id="stub", model="stub"),
+    )
+
+    provider = StubProvider()
+    response = provider.generate(request)
+
+    payload = json.loads(response.raw_text)
+    assert payload["story_summary"]
+    assert payload["test_cases"][0]["type"] == "negative"
+
+
 def test_stub_provider_echoes_request_id() -> None:
     provider = StubProvider()
     response = provider.generate(_make_request("req_xyz"))

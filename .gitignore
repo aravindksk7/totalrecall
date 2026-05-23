@@ -5,6 +5,8 @@ __pycache__/
 *.pyc
 .env
 local-secrets/
+node_modules/
+**/node_modules/
 
 # Local assistant, IDE, and repo-private metadata
 .claude/

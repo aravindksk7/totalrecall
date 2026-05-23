@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from totalrecall.context.models import (
     ContextExclusion,
@@ -16,6 +16,7 @@ from totalrecall.memory.wrapper.service import MemoryWrapper
 from totalrecall.metadata.extractor import MetadataExtractor
 from totalrecall.metadata.models import RequestMetadata
 from totalrecall.skills.registry import SkillRegistry
+
 
 @dataclass
 class ExternalPlanInputs:
@@ -64,8 +65,10 @@ class ContextPlanner:
             request, metadata, remaining
         )
 
-        baseline = _SYSTEM_OVERHEAD_TOKENS + len(request.prompt.split()) + skill_tokens
-        optimized = baseline + memory_tokens
+        prompt_tokens = len(request.prompt.split())
+        optimized = _SYSTEM_OVERHEAD_TOKENS + prompt_tokens + skill_tokens + memory_tokens
+        candidate_memory_tokens = memory_tokens + (len(memory_exclusions) * _TOKENS_PER_MEMORY)
+        baseline = _SYSTEM_OVERHEAD_TOKENS + prompt_tokens + skill_tokens + candidate_memory_tokens
         saved = max(0, baseline - optimized)
 
         budget = TokenBudget(

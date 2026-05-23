@@ -2,20 +2,25 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from totalrecall import __version__
 from totalrecall.api.routes import (
     catalogue,
+    credentials,
     generations,
     health,
     learning,
     memories,
+    monitoring,
     skills,
     system,
 )
 from totalrecall.auth.provider import ConfigAuthProvider
 from totalrecall.cache.provider import TTLCache
 from totalrecall.config.factory import build_credential_provider, build_feature_flag_provider
+from totalrecall.config.runtime_credentials import RuntimeCredentialStore
+from totalrecall.config.runtime_flags import RuntimeFeatureFlagStore
 from totalrecall.config.settings import Settings
 from totalrecall.context.planner import ContextPlanner
 from totalrecall.generation.orchestrator import GenerationOrchestrator
@@ -25,7 +30,9 @@ from totalrecall.observability.metrics import GenerationMetrics
 from totalrecall.observability.middleware import RequestIdMiddleware
 from totalrecall.prompts.builder import PromptBuilder
 from totalrecall.providers.gateway import ProviderGateway
+from totalrecall.providers.local.provider import LocalProvider
 from totalrecall.providers.normalizer import ResponseNormalizer
+from totalrecall.providers.openai.provider import OpenAIProvider
 from totalrecall.providers.stub.provider import StubProvider
 from totalrecall.ratelimit.provider import RateLimitProvider
 from totalrecall.skills.registry import SkillRegistry
@@ -90,11 +97,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await close_pool(pool)
 
     app = FastAPI(title=resolved_settings.service_name, version=__version__, lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=resolved_settings.cors_allowed_origins,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+        max_age=600,
+    )
 
     app.state.settings = resolved_settings
-    feature_flags = build_feature_flag_provider(resolved_settings)
+    app.state.runtime_credential_store = RuntimeCredentialStore(
+        resolved_settings.local_secrets_dir
+    )
+    app.state.runtime_feature_flag_store = RuntimeFeatureFlagStore(
+        resolved_settings.local_secrets_dir
+    )
+    feature_flags = build_feature_flag_provider(
+        resolved_settings,
+        app.state.runtime_feature_flag_store,
+    )
     app.state.feature_flags = feature_flags
-    app.state.credential_provider = build_credential_provider(resolved_settings)
+    app.state.credential_provider = build_credential_provider(
+        resolved_settings,
+        app.state.runtime_credential_store,
+    )
     app.state.auth_provider = ConfigAuthProvider(resolved_settings.auth_tokens)
 
     # Tombstone filter (populated from DB in lifespan)
@@ -124,7 +150,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Generation pipeline
     planner = ContextPlanner(skill_registry=skill_registry, memory_wrapper=memory_wrapper)
     prompt_builder = PromptBuilder(skill_registry=skill_registry, memory_wrapper=memory_wrapper)
-    gateway = ProviderGateway(providers={"stub": StubProvider()})
+    gateway = ProviderGateway(
+        providers={
+            "stub": StubProvider(),
+            "openai": OpenAIProvider(app.state.credential_provider),
+            "local": LocalProvider(app.state.credential_provider),
+        }
+    )
+    app.state.provider_gateway = gateway
     normalizer = ResponseNormalizer()
     playwright_worker = None
     if resolved_settings.playwright_worker_command:
@@ -135,8 +168,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     validator = ValidationCoordinator(playwright_worker=playwright_worker)
 
     # Testgen components (all feature-flag gated, default off)
-    from totalrecall.testgen.guardrails.input_guardrail import NullInputGuardrail, RuleBasedInputGuardrail
-    from totalrecall.testgen.guardrails.output_guardrail import NullOutputGuardrail, RuleBasedOutputGuardrail
+    from totalrecall.testgen.guardrails.input_guardrail import (
+        NullInputGuardrail,
+        RuleBasedInputGuardrail,
+    )
+    from totalrecall.testgen.guardrails.output_guardrail import (
+        NullOutputGuardrail,
+        RuleBasedOutputGuardrail,
+    )
     from totalrecall.testgen.jira.factory import build_jira_adapter
     from totalrecall.testgen.pack.normalizer import TestCasePackNormalizer
     from totalrecall.testgen.prompts.testgen_builder import TestGenPromptBuilder
@@ -151,12 +190,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     input_guardrail = (
         RuleBasedInputGuardrail()
-        if feature_flags.get("guardrails.input_enabled", False)
+        if feature_flags.get_bool("guardrails.input_enabled", False)
         else NullInputGuardrail()
     )
     output_guardrail = (
         RuleBasedOutputGuardrail()
-        if feature_flags.get("guardrails.output_enabled", False)
+        if feature_flags.get_bool("guardrails.output_enabled", False)
         else NullOutputGuardrail()
     )
     tone_checker = build_tone_checker(feature_flags, gateway)
@@ -189,6 +228,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(memories.router, prefix="/v1")
     app.include_router(learning.router, prefix="/v1")
     app.include_router(skills.router, prefix="/v1")
+    app.include_router(credentials.router, prefix="/v1")
+    app.include_router(monitoring.router, prefix="/v1")
 
     return app
 

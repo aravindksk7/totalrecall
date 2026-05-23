@@ -1,24 +1,29 @@
 """Factory for building the RAG store from feature flags and credentials."""
 
+from totalrecall.config.feature_flags import FeatureFlagProvider
 from totalrecall.testgen.rag.store import NullRagStore, RagStoreProtocol, StubRagStore
 
 
-def build_rag_store(feature_flags, credential_provider=None, settings=None) -> RagStoreProtocol:
+def build_rag_store(
+    feature_flags: FeatureFlagProvider,
+    credential_provider=None,
+    settings=None,
+) -> RagStoreProtocol:
     """Return the appropriate RagStore based on feature flags.
 
     Flag: rag.enabled (bool) — when False, returns NullRagStore.
     Flag: rag.adapter — "pgvector" | "stub" | "null" (default "null").
     """
-    if not feature_flags.get("rag.enabled", False):
+    if not feature_flags.get_bool("rag.enabled", False):
         return NullRagStore()
 
-    adapter = feature_flags.get("rag.adapter", "null")
+    adapter = feature_flags.get_string("rag.adapter", "null")
 
     if adapter == "stub":
         return StubRagStore()
 
     if adapter == "pgvector":
-        dsn = feature_flags.get("rag.dsn", "")
+        dsn = feature_flags.get_string("rag.dsn", "")
         openai_key = ""
         if credential_provider is not None:
             try:

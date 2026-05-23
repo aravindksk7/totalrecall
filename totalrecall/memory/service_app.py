@@ -11,6 +11,8 @@ from totalrecall.auth.permissions import DELETE_MEMORY, WRITE_MEMORY, has_permis
 from totalrecall.auth.provider import ConfigAuthProvider
 from totalrecall.cache.provider import TTLCache
 from totalrecall.config.factory import build_credential_provider, build_feature_flag_provider
+from totalrecall.config.runtime_credentials import RuntimeCredentialStore
+from totalrecall.config.runtime_flags import RuntimeFeatureFlagStore
 from totalrecall.config.settings import Settings
 from totalrecall.memory.factory import build_memory_wrapper
 from totalrecall.memory.models import (
@@ -144,8 +146,20 @@ def create_memory_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = resolved_settings
-    app.state.feature_flags = build_feature_flag_provider(resolved_settings)
-    app.state.credential_provider = build_credential_provider(resolved_settings)
+    app.state.runtime_credential_store = RuntimeCredentialStore(
+        resolved_settings.local_secrets_dir
+    )
+    app.state.runtime_feature_flag_store = RuntimeFeatureFlagStore(
+        resolved_settings.local_secrets_dir
+    )
+    app.state.feature_flags = build_feature_flag_provider(
+        resolved_settings,
+        app.state.runtime_feature_flag_store,
+    )
+    app.state.credential_provider = build_credential_provider(
+        resolved_settings,
+        app.state.runtime_credential_store,
+    )
     app.state.auth_provider = ConfigAuthProvider(resolved_settings.auth_tokens)
     app.state.tombstone_filter = TombstoneFilter()
     app.state.cache = TTLCache(ttl_seconds=resolved_settings.cache_ttl_seconds)

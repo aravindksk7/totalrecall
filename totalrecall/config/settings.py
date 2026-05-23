@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     migrations_path: Path = Path("migrations")
     local_secrets_dir: Path = Path("local-secrets")
     auth_tokens: dict[str, AuthTokenConfig] = Field(default_factory=dict)
+    cors_allowed_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:4173",
+            "http://127.0.0.1:4173",
+        ],
+        description="Browser origins allowed to call the API with Authorization headers.",
+    )
     feature_flags: dict[str, Any] = Field(
         default_factory=lambda: {
             "memory.adapter": "stub",

@@ -17,12 +17,11 @@ def build_memory_adapters(
     adapters: dict[str, MemoryAdapter] = {
         "stub": StubMemoryAdapter([]),
         "null": NullMemoryAdapter(),
-    }
-    if "mem0_api_key" in settings.credential_refs:
-        adapters["mem0_v1"] = Mem0V1Adapter(
+        "mem0_v1": Mem0V1Adapter(
             credential_provider=credential_provider,
             credential_ref="mem0_api_key",
-        )
+        ),
+    }
     return adapters
 
 

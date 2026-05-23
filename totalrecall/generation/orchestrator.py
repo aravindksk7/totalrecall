@@ -3,7 +3,8 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from totalrecall.context.planner import ContextPlanner
+from totalrecall.context.models import ContextExclusionReason
+from totalrecall.context.planner import ContextPlanner, ExternalPlanInputs
 from totalrecall.errors import ServiceError, ServiceErrorCode
 from totalrecall.generation.models import (
     GenerationContextMetadata,
@@ -19,7 +20,6 @@ from totalrecall.providers.gateway import ProviderGateway, ProviderNotFoundError
 from totalrecall.providers.models import ProviderConfig, ProviderRequest
 from totalrecall.providers.normalizer import ResponseNormalizer
 from totalrecall.skills.registry import SkillRegistry
-from totalrecall.context.planner import ExternalPlanInputs
 from totalrecall.testgen.guardrails.input_guardrail import InputGuardrailAdapter
 from totalrecall.testgen.guardrails.output_guardrail import OutputGuardrailAdapter
 from totalrecall.testgen.jira.adapter import JiraAdapterProtocol
@@ -77,7 +77,7 @@ class GenerationOrchestrator:
         request_id = str(uuid.uuid4())
 
         # 0. Reformulate free-text prompt into structured intent when testgen fields are present
-        intent: "ReformulatedIntent | None" = None
+        intent: ReformulatedIntent | None = None
         if self._reformulator is not None and (request.jira_key or request.test_types):
             intent = self._reformulator.reformulate(
                 request.prompt,
@@ -200,7 +200,8 @@ class GenerationOrchestrator:
             refined_text, _ = self._tone_checker.refine(provider_response.raw_text, request_id)
             provider_response = provider_response.model_copy(update={"raw_text": refined_text})
 
-        # 5. Normalize response — testgen path uses TestCasePackNormalizer, codegen uses ResponseNormalizer
+        # 5. Normalize response.
+        # Testgen uses TestCasePackNormalizer; codegen uses ResponseNormalizer.
         test_case_pack = None
         if intent is not None and self._testgen_normalizer is not None:
             jira_key = request.jira_key if hasattr(request, "jira_key") else None
@@ -264,6 +265,23 @@ class GenerationOrchestrator:
             status = GenerationStatus.FAILED
         else:
             status = GenerationStatus.COMPLETED
+        excluded_memory_count = sum(
+            1
+            for exclusion in plan.excluded
+            if exclusion.reason == ContextExclusionReason.TOKEN_BUDGET
+        )
+        token_savings_percent = (
+            round(
+                (
+                    plan.token_budget.estimated_tokens_saved
+                    / plan.token_budget.baseline_estimate
+                )
+                * 100,
+                2,
+            )
+            if plan.token_budget.baseline_estimate
+            else 0.0
+        )
 
         return GenerationResult(
             request_id=request_id,
@@ -276,7 +294,11 @@ class GenerationOrchestrator:
                 skill_ids=plan.skill_ids,
                 memory_ids=plan.memory_ids,
                 estimated_input_tokens=plan.token_budget.estimated_input_tokens,
+                baseline_input_tokens=plan.token_budget.baseline_estimate,
                 estimated_tokens_saved=plan.token_budget.estimated_tokens_saved,
+                token_savings_percent=token_savings_percent,
+                excluded_memory_count=excluded_memory_count,
+                max_input_tokens=plan.token_budget.max_input_tokens,
             ),
             errors=all_errors,
         )

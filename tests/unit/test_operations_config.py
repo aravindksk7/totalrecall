@@ -1,5 +1,5 @@
 from totalrecall.config.credentials import CredentialProviderChain
-from totalrecall.config.feature_flags import ExternalFeatureFlagProvider
+from totalrecall.config.runtime_flags import RuntimeFeatureFlagProvider
 from totalrecall.config.settings import Settings
 from totalrecall.main import create_app
 
@@ -26,4 +26,4 @@ def test_create_app_wires_external_feature_flag_provider_when_configured() -> No
         )
     )
 
-    assert isinstance(app.state.feature_flags, ExternalFeatureFlagProvider)
+    assert isinstance(app.state.feature_flags, RuntimeFeatureFlagProvider)

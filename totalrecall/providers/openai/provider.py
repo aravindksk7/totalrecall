@@ -7,7 +7,7 @@ Install with: uv add openai
 import time
 from typing import Any
 
-from totalrecall.config.credentials import EnvLocalCredentialProvider
+from totalrecall.config.credentials import CredentialProvider
 from totalrecall.errors import ServiceError, ServiceErrorCode
 from totalrecall.providers.base import ProviderInterface
 from totalrecall.providers.models import (
@@ -36,7 +36,7 @@ class OpenAIProvider(ProviderInterface):
 
     def __init__(
         self,
-        credential_provider: EnvLocalCredentialProvider,
+        credential_provider: CredentialProvider,
         credential_ref: str = "openai_api_key",
     ) -> None:
         self._credential_provider = credential_provider
@@ -60,7 +60,24 @@ class OpenAIProvider(ProviderInterface):
         return self._client
 
     def generate(self, request: ProviderRequest) -> ProviderResponse:
-        client = self._get_client()
+        try:
+            client = self._get_client()
+        except Exception as exc:
+            return ProviderResponse(
+                request_id=request.request_id,
+                provider_id=self._PROVIDER_ID,
+                model=request.config.model,
+                raw_text="",
+                finish_reason=ProviderFinishReason.ERROR,
+                latency_ms=0,
+                errors=[
+                    ServiceError(
+                        code=ServiceErrorCode.PROVIDER_UNAVAILABLE,
+                        message=str(exc),
+                        retryable=True,
+                    )
+                ],
+            )
         messages = [{"role": m.role.value, "content": m.content} for m in request.messages]
 
         kwargs: dict[str, Any] = {
@@ -118,7 +135,7 @@ class OpenAIProvider(ProviderInterface):
     def health(self) -> ProviderHealth:
         try:
             client = self._get_client()
-        except ImportError as exc:
+        except Exception as exc:
             return ProviderHealth(
                 provider_id=self._PROVIDER_ID,
                 status=ProviderHealthStatus.UNAVAILABLE,

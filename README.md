@@ -106,10 +106,12 @@ docker compose up --build app
 This starts:
 
 - Postgres on `localhost:5432`
+- A one-shot `migrate` container that applies SQL migrations
 - TotalRecall API on `http://localhost:8000`
 
-The app container waits for Postgres, applies SQL migrations, then starts
-Uvicorn.
+The app container waits for Postgres and the migration job before it starts
+Uvicorn. The development override also enables Uvicorn reload for mounted source
+files.
 
 Verify health:
 
@@ -141,10 +143,10 @@ http://localhost:8000/docs
 
 ## Step 3: Start All Local Services
 
-To start the main API and standalone memory wrapper together:
+To start the main API, standalone memory wrapper, and Docker-served admin UI:
 
 ```powershell
-docker compose up --build app memory-wrapper
+docker compose up --build app memory-wrapper admin-ui
 ```
 
 Service URLs:
@@ -153,6 +155,13 @@ Service URLs:
 - Main API docs: `http://localhost:8000/docs`
 - Memory wrapper API: `http://localhost:8001`
 - Memory wrapper docs: `http://localhost:8001/docs`
+- Admin UI: `http://localhost:4173`
+- Admin UI proxied API base: `http://localhost:4173/v1`
+
+When you use the Docker-served admin UI, set the UI API Base to
+`http://localhost:4173/v1`. Nginx serves the static UI and proxies `/v1/*` and
+`/health` to the main API container, so browser requests stay on the same
+origin.
 
 The default Docker configuration uses the deterministic stub memory adapter:
 
@@ -265,6 +274,18 @@ Invoke-RestMethod `
 ```powershell
 Invoke-RestMethod http://localhost:8000/v1/metrics
 ```
+
+### View Monitoring Summary
+
+```powershell
+Invoke-RestMethod `
+  -Headers $headers `
+  -Uri http://localhost:8000/v1/monitoring/summary
+```
+
+The monitoring summary includes memory health, Mem0 readiness, memory operation
+counters, provider registration and credential status, and the latest
+token-efficiency snapshot from context planning.
 
 ## Step 7: Generate Test Automation Artifacts
 
@@ -566,6 +587,20 @@ $env:TOTALRECALL_FEATURE_FLAGS = '{"memory.adapter":"mem0_v1","memory.write_enab
 
 Restart the app or memory wrapper after changing feature flags.
 
+With the Docker-served admin UI, you can do the same for local development from
+the `Credentials` view:
+
+1. Select `Mem0 API Key`.
+2. Paste the Mem0 token.
+3. Check `Apply linked runtime defaults`.
+4. Save the credential.
+
+The UI writes `local-secrets/mem0_api_key` and applies runtime flags for
+`memory.adapter=mem0_v1`, `memory.write_enabled=true`, and
+`memory.fail_open_on_search=true`. The saved secret is ignored by Git and is
+shared with the Docker app and memory wrapper through the `local-secrets` bind
+mount.
+
 Supported credential reference formats:
 
 - `env:MEM0_API_KEY`
@@ -694,7 +729,45 @@ Invoke-RestMethod `
 
 The admin UI is static and lives under `ui/admin`.
 
-Serve it locally:
+Start the Docker-served UI with the API:
+
+```powershell
+docker compose up --build app admin-ui
+```
+
+Open:
+
+```text
+http://localhost:4173
+```
+
+Use these connection values:
+
+```text
+API Base: http://localhost:4173/v1
+Token: dev-token
+Tenant ID: tenant_dev
+Application ID: app_demo
+```
+
+The `Generate` view can submit a prompt directly to `/v1/generations`. Optional
+fields such as JIRA key and requested test types let the backend orchestrator
+pull JIRA context, retrieve RAG guidance, select skills and memories, run
+guardrails, call the configured provider, and return artifacts or a test case
+pack in one flow.
+
+The `Credentials` view can save local runtime credential values for Mem0,
+OpenAI, Claude/Anthropic, Gemini, local LLM endpoints, and JIRA. Values are
+written under the ignored `local-secrets` directory and are not returned by the
+API after saving. Select `Apply linked runtime defaults` when saving
+`mem0_api_key` to switch the runtime memory adapter to `mem0_v1`.
+
+The `Monitoring` view shows operational status for memory and Mem0, memory
+operation counters, provider registration/credential readiness, and the latest
+token-efficiency snapshot from generation context planning. Use the refresh
+control or auto-refresh selector when validating runtime memory/provider setup.
+
+You can also serve the static files directly without Docker:
 
 ```powershell
 cd ui/admin
@@ -712,6 +785,7 @@ Use these connection values:
 ```text
 API Base: http://localhost:8000/v1
 Token: dev-token
+Tenant ID: tenant_dev
 Application ID: app_demo
 ```
 
@@ -725,9 +799,10 @@ npm install
 npm run build
 ```
 
-The backend does not currently enable browser CORS by default. If browser calls
-from `localhost:4173` to `localhost:8000` are blocked, use OpenAPI docs, the
-CLI, or serve the UI and API behind the same origin.
+Browser calls from `http://localhost:4173` and `http://127.0.0.1:4173` are
+allowed by default through `TOTALRECALL_CORS_ALLOWED_ORIGINS`. If you serve the
+admin UI from a different host or port, add that origin to the setting before
+starting the API.
 
 ## Step 17: Use The CLI
 
@@ -817,7 +892,7 @@ uv run ruff check .
 Run focused memory wrapper tests:
 
 ```powershell
-docker compose run --build --rm test uv run pytest `
+docker compose run --build --rm test test `
   tests/unit/test_mem0_adapter.py `
   tests/contract/test_mem0_wrapper_contract.py `
   tests/contract/test_memory_wrapper.py
@@ -840,7 +915,13 @@ docker compose down -v
 Rebuild after dependency changes:
 
 ```powershell
-docker compose build --no-cache app test memory-wrapper
+docker compose build --no-cache app migrate test memory-wrapper
+```
+
+Run migrations manually:
+
+```powershell
+docker compose run --rm migrate
 ```
 
 Inspect logs:
@@ -848,6 +929,8 @@ Inspect logs:
 ```powershell
 docker compose logs -f app
 docker compose logs -f memory-wrapper
+docker compose logs -f migrate
+docker compose logs -f admin-ui
 docker compose logs -f postgres
 ```
 
@@ -899,10 +982,11 @@ Start Postgres and set:
 TOTALRECALL_ENABLE_DATABASE=true
 ```
 
-### Mem0 Adapter Is Not Available
+### Mem0 Adapter Is Unavailable Or Inactive
 
-The Mem0 adapter is registered only when `TOTALRECALL_CREDENTIAL_REFS` includes
-`mem0_api_key`.
+The Mem0 adapter is registered by the app, but it is only active when
+`memory.adapter` is set to `mem0_v1` and a `mem0_api_key` credential can be
+resolved.
 
 Confirm:
 
@@ -912,7 +996,10 @@ TOTALRECALL_CREDENTIAL_REFS={"mem0_api_key":"env:MEM0_API_KEY"}
 MEM0_API_KEY=<your key>
 ```
 
-Restart the app after changing those values.
+For Docker/local development you can also save `mem0_api_key` in the Admin UI
+`Credentials` view and check `Apply linked runtime defaults`. Use the
+`Monitoring` view to confirm `mem0.status`, credential configuration, SDK
+availability, write-enabled state, and fail-open state.
 
 ### Learning Run Finds No Files
 
@@ -921,9 +1008,17 @@ must be mounted into the container before the service can scan them.
 
 ### Admin UI Cannot Call The API
 
-The backend currently does not install CORS middleware by default. Use OpenAPI
-docs at `http://localhost:8000/docs`, use the CLI, or serve the UI and API from
-the same origin.
+For direct API calls from the browser, confirm:
+
+- API Base is `http://localhost:8000/v1` or the proxied
+  `http://localhost:4173/v1`.
+- Bearer token is set to the development token `dev-token`.
+- `TOTALRECALL_CORS_ALLOWED_ORIGINS` includes the UI origin when using a custom
+  host or port.
+
+The browser sends an `OPTIONS` preflight for authenticated calls because the UI
+uses the `Authorization` header. The API should answer that preflight with
+`200` for allowed origins.
 
 ## Security Notes
 

@@ -58,10 +58,144 @@ interface LearningReport {
   warnings: string[];
 }
 
+interface GeneratedArtifact {
+  path: string;
+  language: string;
+  content: string;
+  artifact_type: string;
+}
+
+interface GenerationResult {
+  request_id: string;
+  status: string;
+  artifacts: GeneratedArtifact[];
+  validation?: Record<string, JsonValue>;
+  context?: {
+    context_plan_id?: string | null;
+    skill_ids?: string[];
+    memory_ids?: string[];
+    estimated_input_tokens?: number;
+    estimated_tokens_saved?: number;
+  };
+  errors?: JsonValue[];
+  test_case_pack?: Record<string, JsonValue> | null;
+}
+
+interface RuntimeCredentialStatus {
+  key: string;
+  label: string;
+  platform: string;
+  usage: string;
+  provider_id?: string | null;
+  memory_adapter?: string | null;
+  env_var?: string | null;
+  secret: boolean;
+  configured: boolean;
+  ref?: string | null;
+  updated_at?: string | null;
+  notes: string;
+}
+
+interface RuntimeCredentialList {
+  credentials: RuntimeCredentialStatus[];
+  total: number;
+}
+
+interface MemoryOperationStats {
+  search_total: number;
+  search_success_total: number;
+  search_failure_total: number;
+  search_cache_hit_total: number;
+  average_search_latency_ms: number;
+  get_total: number;
+  get_success_total: number;
+  get_failure_total: number;
+  average_get_latency_ms: number;
+  upsert_total: number;
+  upsert_success_total: number;
+  upsert_failure_total: number;
+  average_upsert_latency_ms: number;
+  delete_total: number;
+  delete_success_total: number;
+  delete_failure_total: number;
+  average_delete_latency_ms: number;
+  last_success_at?: string | null;
+  last_failure_at?: string | null;
+  last_error_type?: string | null;
+}
+
+interface MemoryMonitorSnapshot {
+  active_adapter: string;
+  configured_adapter: string;
+  health: {
+    status: string;
+    adapter_version: string;
+    degraded: boolean;
+  };
+  capabilities: Record<string, JsonValue>;
+  operations: MemoryOperationStats;
+  mem0: {
+    credential_configured: boolean;
+    active: boolean;
+    sdk_available: boolean;
+    status: string;
+    write_enabled: boolean;
+    fail_open_on_search: boolean;
+    supports_search: boolean;
+    supports_get: boolean;
+    supports_upsert: boolean;
+    supports_delete: boolean;
+  };
+}
+
+interface ProviderMonitorStatus {
+  provider_id: string;
+  registered: boolean;
+  credential_configured: boolean;
+  status: string;
+  model?: string | null;
+  latency_ms?: number | null;
+  error?: string | null;
+}
+
+interface TokenEfficiencySnapshot {
+  generations_total: number;
+  input_tokens_total: number;
+  output_tokens_total: number;
+  estimated_tokens_saved_total: number;
+  last_context_plan_id?: string | null;
+  last_estimated_input_tokens: number;
+  last_baseline_input_tokens: number;
+  last_estimated_tokens_saved: number;
+  last_token_savings_percent: number;
+  last_selected_skill_count: number;
+  last_selected_memory_count: number;
+  last_excluded_memory_count: number;
+  last_max_input_tokens: number;
+}
+
+interface MonitoringSummary {
+  status: string;
+  tenant_id: string;
+  actor_id: string;
+  memory: MemoryMonitorSnapshot;
+  providers: ProviderMonitorStatus[];
+  token_efficiency: TokenEfficiencySnapshot;
+  generation_metrics: Record<string, JsonValue>;
+}
+
 interface AppState {
-  activeView: "catalogue" | "memory" | "learning" | "flags";
+  activeView:
+    | "generate"
+    | "credentials"
+    | "monitoring"
+    | "catalogue"
+    | "memory"
+    | "learning"
+    | "flags";
   apiBase: string;
   token: string;
+  tenantId: string;
   applicationId: string;
 }
 
@@ -69,8 +203,11 @@ const state: AppState = {
   activeView: "catalogue",
   apiBase: localStorage.getItem("totalrecall.admin.apiBase") ?? "http://localhost:8000/v1",
   token: localStorage.getItem("totalrecall.admin.token") ?? "",
+  tenantId: localStorage.getItem("totalrecall.admin.tenantId") ?? "tenant_dev",
   applicationId: localStorage.getItem("totalrecall.admin.applicationId") ?? "app_test",
 };
+
+let monitoringRefreshTimer: number | null = null;
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -114,18 +251,33 @@ function getTextArea(id: string): HTMLTextAreaElement {
 function saveConnection(): void {
   state.apiBase = getInput("api-base").value.trim().replace(/\/$/, "");
   state.token = getInput("api-token").value.trim();
+  state.tenantId = getInput("tenant-id").value.trim();
   state.applicationId = getInput("application-id").value.trim();
   getInput("memory-application-id").value = state.applicationId;
 
   localStorage.setItem("totalrecall.admin.apiBase", state.apiBase);
   localStorage.setItem("totalrecall.admin.token", state.token);
+  localStorage.setItem("totalrecall.admin.tenantId", state.tenantId);
   localStorage.setItem("totalrecall.admin.applicationId", state.applicationId);
   setStatus("Connection saved.");
+}
+
+function requiresBearerToken(path: string): boolean {
+  return path.startsWith("/monitoring/")
+    || path.startsWith("/credentials")
+    || path.startsWith("/catalogue")
+    || path.startsWith("/memories/")
+    || path.startsWith("/learning/")
+    || path.startsWith("/generations")
+    || path.startsWith("/flags");
 }
 
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!state.apiBase) {
     throw new Error("API base is required.");
+  }
+  if (requiresBearerToken(path) && !state.token) {
+    throw new Error("Bearer token is required. For Docker, use dev-token and click Save.");
   }
   const headers = new Headers(init.headers);
   if (state.token) {
@@ -164,6 +316,353 @@ function paramsFrom(values: Record<string, string | number | null | undefined>):
   }
   const query = params.toString();
   return query ? `?${query}` : "";
+}
+
+function commaList(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function selectedTestTypes(): string[] {
+  return Array.from(
+    document.querySelectorAll<HTMLInputElement>("[data-generation-test-type]:checked"),
+  ).map((input) => input.value);
+}
+
+async function generateFromPrompt(event: SubmitEvent): Promise<void> {
+  event.preventDefault();
+  saveConnection();
+
+  const prompt = getTextArea("generation-prompt").value.trim();
+  const domain = getInput("generation-domain").value.trim();
+  const jiraKey = getInput("generation-jira-key").value.trim();
+  const route = getInput("generation-route").value.trim();
+  const tags = commaList(getInput("generation-tags").value);
+  const testTypes = selectedTestTypes();
+  const maxInputTokens = Number(getInput("generation-max-input-tokens").value || "12000");
+
+  if (!state.tenantId || !state.applicationId || !prompt || !domain) {
+    throw new Error("Tenant, application, prompt, and domain are required.");
+  }
+
+  const body = {
+    tenant_id: state.tenantId,
+    application_id: state.applicationId,
+    prompt,
+    ...(jiraKey ? { jira_key: jiraKey } : {}),
+    ...(testTypes.length > 0 ? { test_types: testTypes } : {}),
+    target: {
+      language: getSelect("generation-language").value,
+      framework: getSelect("generation-framework").value,
+      pattern: "pom",
+      locator_strategy: getSelect("generation-locator").value,
+    },
+    scope: {
+      domain,
+      ...(route ? { route } : {}),
+      tags,
+    },
+    provider: {
+      provider_id: getInput("generation-provider").value.trim() || "stub",
+      model: getInput("generation-model").value.trim() || "stub",
+    },
+    options: {
+      validate: getInput("generation-validate").checked,
+      allow_repair: getInput("generation-allow-repair").checked,
+      max_input_tokens: Number.isFinite(maxInputTokens) && maxInputTokens > 0 ? maxInputTokens : 12000,
+    },
+  };
+
+  $("generation-result").innerHTML = '<p class="muted">Generation running.</p>';
+  const result = await apiFetch<GenerationResult>("/generations", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  renderGenerationResult(result);
+  setStatus(`Generation ${result.status}: ${result.request_id}`);
+}
+
+function renderGenerationResult(result: GenerationResult): void {
+  const context = result.context ?? {};
+  const skills = context.skill_ids ?? [];
+  const memories = context.memory_ids ?? [];
+  const artifacts = result.artifacts ?? [];
+  const validationStatus = result.validation?.status ?? "n/a";
+
+  $("generation-result").innerHTML = `
+    <dl class="result-summary">
+      <div><dt>Status</dt><dd>${escapeHtml(result.status)}</dd></div>
+      <div><dt>Validation</dt><dd>${escapeHtml(validationStatus)}</dd></div>
+      <div><dt>Input tokens</dt><dd>${escapeHtml(context.estimated_input_tokens ?? 0)}</dd></div>
+      <div><dt>Artifacts</dt><dd>${escapeHtml(artifacts.length)}</dd></div>
+      <div><dt>Request</dt><dd>${escapeHtml(result.request_id)}</dd></div>
+      <div><dt>Skills</dt><dd>${escapeHtml(skills.length ? skills.join(", ") : "none")}</dd></div>
+      <div><dt>Memory</dt><dd>${escapeHtml(memories.length ? memories.join(", ") : "none")}</dd></div>
+      <div><dt>Tokens saved</dt><dd>${escapeHtml(context.estimated_tokens_saved ?? 0)}</dd></div>
+    </dl>
+    ${renderTestCasePack(result.test_case_pack)}
+    ${renderArtifacts(artifacts)}
+    ${renderErrors(result.errors ?? [])}
+    <h3>Raw Result</h3>
+    <pre>${escapeHtml(prettyJson(result))}</pre>
+  `;
+}
+
+function renderTestCasePack(pack: Record<string, JsonValue> | null | undefined): string {
+  if (!pack) {
+    return "";
+  }
+  return `
+    <h3>Test Case Pack</h3>
+    <pre>${escapeHtml(prettyJson(pack))}</pre>
+  `;
+}
+
+function renderArtifacts(artifacts: GeneratedArtifact[]): string {
+  if (artifacts.length === 0) {
+    return "";
+  }
+  return `
+    <h3>Generated Artifacts</h3>
+    <div class="artifact-list">
+      ${artifacts
+        .map(
+          (artifact) => `
+            <article class="artifact">
+              <strong>${escapeHtml(artifact.path)} <span class="badge">${escapeHtml(artifact.artifact_type)}</span></strong>
+              <pre>${escapeHtml(artifact.content)}</pre>
+            </article>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderErrors(errors: JsonValue[]): string {
+  if (errors.length === 0) {
+    return "";
+  }
+  return `
+    <h3>Errors</h3>
+    <pre>${escapeHtml(prettyJson(errors))}</pre>
+  `;
+}
+
+async function loadCredentials(): Promise<void> {
+  saveConnection();
+  const result = await apiFetch<RuntimeCredentialList>("/credentials");
+  renderCredentials(result.credentials);
+  setStatus(`Loaded ${result.total} credential definitions.`);
+}
+
+async function saveRuntimeCredential(event: SubmitEvent): Promise<void> {
+  event.preventDefault();
+  saveConnection();
+  const credentialKey = getSelect("credential-key").value;
+  const value = getInput("credential-value").value.trim();
+  const activate = getInput("credential-activate").checked;
+  if (!value) {
+    throw new Error("Credential value is required.");
+  }
+
+  const result = await apiFetch<Record<string, JsonValue>>(
+    `/credentials/${encodeURIComponent(credentialKey)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ value, activate }),
+    },
+  );
+  getInput("credential-value").value = "";
+  getInput("credential-activate").checked = false;
+  await loadCredentials();
+  setStatus(
+    result.activated
+      ? `Saved ${credentialKey} and applied runtime defaults.`
+      : `Saved ${credentialKey}.`,
+  );
+}
+
+function renderCredentials(credentials: RuntimeCredentialStatus[]): void {
+  const body = $("credential-results");
+  if (credentials.length === 0) {
+    body.innerHTML = '<tr><td colspan="5" class="empty-cell">No credentials available.</td></tr>';
+    return;
+  }
+  body.innerHTML = credentials
+    .map((item) => {
+      const integration = [
+        item.provider_id ? `Provider: ${item.provider_id}` : "",
+        item.memory_adapter ? `Memory: ${item.memory_adapter}` : "",
+        item.env_var ? `Env: ${item.env_var}` : "",
+      ]
+        .filter(Boolean)
+        .join(" | ");
+      return `
+        <tr class="credential-row ${item.configured ? "configured" : ""}">
+          <td><span class="badge">${escapeHtml(item.platform)}</span></td>
+          <td>
+            <strong>${escapeHtml(item.label)}</strong>
+            <p class="muted">${escapeHtml(item.usage)}</p>
+            ${item.notes ? `<p class="muted">${escapeHtml(item.notes)}</p>` : ""}
+          </td>
+          <td>${item.configured ? "Configured" : "Not configured"}</td>
+          <td>${escapeHtml(integration || "Stored credential")}</td>
+          <td>
+            <button type="button" data-credential-delete="${escapeHtml(item.key)}" ${item.configured ? "" : "disabled"}>Remove</button>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  body.querySelectorAll<HTMLButtonElement>("[data-credential-delete]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const key = button.dataset.credentialDelete;
+      if (key) {
+        void deleteRuntimeCredential(key).catch((error) => setStatus(String(error), "error"));
+      }
+    });
+  });
+}
+
+async function deleteRuntimeCredential(credentialKey: string): Promise<void> {
+  if (!window.confirm(`Remove stored credential '${credentialKey}'?`)) {
+    return;
+  }
+  await apiFetch<Record<string, JsonValue>>(`/credentials/${encodeURIComponent(credentialKey)}`, {
+    method: "DELETE",
+  });
+  await loadCredentials();
+  setStatus(`Removed ${credentialKey}.`);
+}
+
+async function loadMonitoring(): Promise<void> {
+  saveConnection();
+  const summary = await apiFetch<MonitoringSummary>("/monitoring/summary");
+  renderMonitoring(summary);
+  setStatus(`Monitoring loaded: ${summary.status}.`);
+}
+
+function statusClass(status: string): string {
+  if (["healthy", "ok", "active"].includes(status)) {
+    return "status-pill ok";
+  }
+  if (["degraded", "inactive", "unregistered", "unconfigured"].includes(status)) {
+    return "status-pill warning";
+  }
+  return "status-pill error";
+}
+
+function statusPill(status: string): string {
+  return `<span class="${statusClass(status)}">${escapeHtml(status)}</span>`;
+}
+
+function renderMonitoring(summary: MonitoringSummary): void {
+  const memory = summary.memory;
+  const token = summary.token_efficiency;
+  $("monitoring-status-cards").innerHTML = `
+    <article class="metric-card">
+      <span class="metric-label">System</span>
+      <strong>${statusPill(summary.status)}</strong>
+      <small>${escapeHtml(summary.tenant_id)} / ${escapeHtml(summary.actor_id)}</small>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">Memory</span>
+      <strong>${statusPill(memory.health.status)}</strong>
+      <small>${escapeHtml(memory.active_adapter)} active</small>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">Mem0</span>
+      <strong>${statusPill(memory.mem0.status)}</strong>
+      <small>${memory.mem0.credential_configured ? "credential configured" : "credential missing"}</small>
+    </article>
+    <article class="metric-card">
+      <span class="metric-label">Tokens saved</span>
+      <strong>${escapeHtml(token.estimated_tokens_saved_total)}</strong>
+      <small>${escapeHtml(token.last_token_savings_percent)}% last run</small>
+    </article>
+  `;
+
+  renderKeyValueList("monitoring-memory-list", {
+    active_adapter: memory.active_adapter,
+    configured_adapter: memory.configured_adapter,
+    degraded: memory.health.degraded,
+    mem0_credential_configured: memory.mem0.credential_configured,
+    mem0_sdk_available: memory.mem0.sdk_available,
+    memory_write_enabled: memory.mem0.write_enabled,
+    memory_fail_open_on_search: memory.mem0.fail_open_on_search,
+    search_total: memory.operations.search_total,
+    search_success_total: memory.operations.search_success_total,
+    search_failure_total: memory.operations.search_failure_total,
+    search_cache_hit_total: memory.operations.search_cache_hit_total,
+    average_search_latency_ms: memory.operations.average_search_latency_ms,
+    upsert_total: memory.operations.upsert_total,
+    delete_total: memory.operations.delete_total,
+    last_success_at: memory.operations.last_success_at ?? "n/a",
+    last_failure_at: memory.operations.last_failure_at ?? "n/a",
+    last_error_type: memory.operations.last_error_type ?? "n/a",
+  });
+
+  renderKeyValueList("monitoring-token-list", {
+    generations_total: token.generations_total,
+    input_tokens_total: token.input_tokens_total,
+    output_tokens_total: token.output_tokens_total,
+    estimated_tokens_saved_total: token.estimated_tokens_saved_total,
+    last_context_plan_id: token.last_context_plan_id ?? "n/a",
+    last_baseline_input_tokens: token.last_baseline_input_tokens,
+    last_estimated_input_tokens: token.last_estimated_input_tokens,
+    last_estimated_tokens_saved: token.last_estimated_tokens_saved,
+    last_token_savings_percent: token.last_token_savings_percent,
+    last_selected_skill_count: token.last_selected_skill_count,
+    last_selected_memory_count: token.last_selected_memory_count,
+    last_excluded_memory_count: token.last_excluded_memory_count,
+    last_max_input_tokens: token.last_max_input_tokens,
+  });
+
+  renderProviderMonitoring(summary.providers);
+  $("monitoring-raw").textContent = prettyJson(summary);
+}
+
+function renderProviderMonitoring(providers: ProviderMonitorStatus[]): void {
+  const body = $("monitoring-provider-results");
+  if (providers.length === 0) {
+    body.innerHTML = '<tr><td colspan="5" class="empty-cell">No providers returned.</td></tr>';
+    return;
+  }
+  body.innerHTML = providers
+    .map(
+      (provider) => `
+        <tr>
+          <td>
+            <strong>${escapeHtml(provider.provider_id)}</strong>
+            <p class="muted">${provider.registered ? "registered" : "not registered"}</p>
+          </td>
+          <td>${statusPill(provider.status)}</td>
+          <td>${provider.credential_configured ? "Configured" : "Not configured"}</td>
+          <td>${escapeHtml(provider.latency_ms ?? "n/a")}</td>
+          <td>${escapeHtml(provider.error ?? "")}</td>
+        </tr>
+      `,
+    )
+    .join("");
+}
+
+function updateMonitoringRefresh(): void {
+  if (monitoringRefreshTimer !== null) {
+    window.clearInterval(monitoringRefreshTimer);
+    monitoringRefreshTimer = null;
+  }
+  const intervalMs = Number(getSelect("monitoring-refresh-interval").value || "0");
+  if (intervalMs > 0) {
+    monitoringRefreshTimer = window.setInterval(() => {
+      if (state.activeView === "monitoring") {
+        void loadMonitoring().catch((error) => setStatus(String(error), "error"));
+      }
+    }, intervalMs);
+  }
 }
 
 async function loadCatalogue(): Promise<void> {
@@ -363,7 +862,8 @@ async function loadFlagsAndMetrics(): Promise<void> {
     apiFetch<Record<string, JsonValue>>("/flags"),
     apiFetch<Record<string, JsonValue>>("/metrics"),
   ]);
-  renderKeyValueList("flag-list", (flags.flags as Record<string, JsonValue> | undefined)?.values ?? {});
+  const flagSnapshot = flags.flags as { values?: Record<string, JsonValue> } | undefined;
+  renderKeyValueList("flag-list", flagSnapshot?.values ?? {});
   renderKeyValueList("metric-list", metrics);
   setStatus("Loaded flags and metrics.");
 }
@@ -393,7 +893,13 @@ function switchView(view: AppState["activeView"]): void {
 
 async function refreshActive(): Promise<void> {
   try {
-    if (state.activeView === "catalogue") {
+    if (state.activeView === "generate") {
+      setStatus("Generation form ready.");
+    } else if (state.activeView === "credentials") {
+      await loadCredentials();
+    } else if (state.activeView === "monitoring") {
+      await loadMonitoring();
+    } else if (state.activeView === "catalogue") {
       await loadCatalogue();
     } else if (state.activeView === "learning") {
       await loadLearningRuns();
@@ -410,11 +916,25 @@ async function refreshActive(): Promise<void> {
 function bind(): void {
   getInput("api-base").value = state.apiBase;
   getInput("api-token").value = state.token;
+  getInput("tenant-id").value = state.tenantId;
   getInput("application-id").value = state.applicationId;
   getInput("memory-application-id").value = state.applicationId;
 
   $("save-connection").addEventListener("click", saveConnection);
   $("refresh-active").addEventListener("click", () => void refreshActive());
+  $("generation-form").addEventListener("submit", (event) =>
+    void generateFromPrompt(event as SubmitEvent).catch((error) => setStatus(String(error), "error")),
+  );
+  $("credential-form").addEventListener("submit", (event) =>
+    void saveRuntimeCredential(event as SubmitEvent).catch((error) => setStatus(String(error), "error")),
+  );
+  $("load-credentials").addEventListener("click", () =>
+    void loadCredentials().catch((error) => setStatus(String(error), "error")),
+  );
+  $("load-monitoring").addEventListener("click", () =>
+    void loadMonitoring().catch((error) => setStatus(String(error), "error")),
+  );
+  $("monitoring-refresh-interval").addEventListener("change", updateMonitoringRefresh);
   $("catalogue-form").addEventListener("submit", (event) => {
     event.preventDefault();
     void refreshActive();
