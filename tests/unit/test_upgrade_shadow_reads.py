@@ -189,3 +189,152 @@ def test_shadow_read_accumulates_across_multiple_searches() -> None:
     wrapper.search(_search_request())
     wrapper.search(_search_request())
     assert len(wrapper._shadow_log) == 2
+
+
+# --- cache hit ---
+
+def test_search_cache_hit_returns_cached_result_without_adapter_call() -> None:
+    from totalrecall.cache.provider import TTLCache, build_search_cache_key
+    from totalrecall.memory.models import MemorySearchResult
+
+    cache = TTLCache(ttl_seconds=60)
+    req = _search_request()
+    cached_result = MemorySearchResult(items=[_entry("cached_entry")], adapter_version="stub")
+    cache_key = build_search_cache_key(
+        req.tenant_id, req.application_id, req.query or "", req.filters, req.limit
+    )
+    cache.set(cache_key, cached_result)
+
+    call_count = 0
+    real_stub = StubMemoryAdapter([_entry("live_entry")])
+
+    class _CountingAdapter(StubMemoryAdapter):
+        def search(self, request):
+            nonlocal call_count
+            call_count += 1
+            return super().search(request)
+
+    wrapper = MemoryWrapper(
+        feature_flags=ConfigFeatureFlagProvider({"memory.adapter": "counting"}),
+        adapters={"counting": _CountingAdapter([_entry("live_entry")]), "null": NullMemoryAdapter()},
+        cache=cache,
+    )
+
+    result = wrapper.search(req)
+    assert result.items[0].entity_id == "cached_entry"
+    assert call_count == 0
+
+
+# --- operation metrics ---
+
+def test_operation_metrics_record_cache_hit_counter() -> None:
+    from totalrecall.cache.provider import TTLCache, build_search_cache_key
+    from totalrecall.memory.models import MemorySearchResult
+
+    cache = TTLCache(ttl_seconds=60)
+    req = _search_request()
+    cache_key = build_search_cache_key(
+        req.tenant_id, req.application_id, req.query or "", req.filters, req.limit
+    )
+    cache.set(cache_key, MemorySearchResult(items=[], adapter_version="stub"))
+
+    wrapper = _build_wrapper()
+    wrapper._cache = cache  # type: ignore[attr-defined]
+
+    wrapper.search(req)
+
+    stats = wrapper.operation_stats()
+    assert stats["search_cache_hit_total"] == 1
+
+
+# --- tombstone in get ---
+
+def test_get_returns_none_for_tombstoned_entry() -> None:
+    from totalrecall.memory.models import MemoryGetRequest
+    from totalrecall.memory.tombstone import TombstoneFilter
+
+    tombstone = TombstoneFilter()
+    tombstone.add("tenant_t", "app_t", "mem_a")
+    wrapper = MemoryWrapper(
+        feature_flags=ConfigFeatureFlagProvider({"memory.adapter": "stub_a"}),
+        adapters={"stub_a": StubMemoryAdapter([_entry("mem_a")]), "null": NullMemoryAdapter()},
+        tombstone_filter=tombstone,
+    )
+
+    result = wrapper.get(
+        MemoryGetRequest(tenant_id="tenant_t", application_id="app_t", entity_id="mem_a")
+    )
+    assert result is None
+
+
+# --- failure paths for get / upsert / delete ---
+
+def test_get_failure_raises_and_records_metric() -> None:
+    from totalrecall.memory.models import MemoryGetRequest
+
+    class _BrokenAdapter:
+        adapter_version = "broken"
+        def get(self, request): raise RuntimeError("get broke")
+        def search(self, request): raise RuntimeError("search broke")
+        def upsert(self, request): raise RuntimeError("upsert broke")
+        def delete(self, request): raise RuntimeError("delete broke")
+        def health(self): raise RuntimeError("health broke")
+        def capabilities(self): raise RuntimeError("caps broke")
+
+    wrapper = MemoryWrapper(
+        feature_flags=ConfigFeatureFlagProvider({"memory.adapter": "broken"}),
+        adapters={"broken": _BrokenAdapter(), "null": NullMemoryAdapter()},
+    )
+
+    import pytest
+    with pytest.raises(RuntimeError, match="get broke"):
+        wrapper.get(
+            MemoryGetRequest(tenant_id="t", application_id="a", entity_id="m1")
+        )
+    stats = wrapper.operation_stats()
+    assert stats["get_failure_total"] == 1
+
+
+def test_upsert_failure_raises_and_records_metric() -> None:
+    class _BrokenAdapter:
+        adapter_version = "broken"
+        def upsert(self, request): raise RuntimeError("upsert broke")
+
+    wrapper = MemoryWrapper(
+        feature_flags=ConfigFeatureFlagProvider({"memory.adapter": "broken"}),
+        adapters={"broken": _BrokenAdapter(), "null": NullMemoryAdapter()},
+    )
+
+    import pytest
+    with pytest.raises(RuntimeError, match="upsert broke"):
+        wrapper.upsert(MemoryUpsertRequest(memory=_entry("m1")))
+    stats = wrapper.operation_stats()
+    assert stats["upsert_failure_total"] == 1
+
+
+def test_delete_failure_raises_and_records_metric() -> None:
+    from totalrecall.memory.models import MemoryDeleteRequest
+
+    class _BrokenAdapter:
+        adapter_version = "broken"
+        def delete(self, request): raise RuntimeError("delete broke")
+
+    wrapper = MemoryWrapper(
+        feature_flags=ConfigFeatureFlagProvider({"memory.adapter": "broken"}),
+        adapters={"broken": _BrokenAdapter(), "null": NullMemoryAdapter()},
+    )
+
+    import pytest
+    with pytest.raises(RuntimeError, match="delete broke"):
+        wrapper.delete(
+            MemoryDeleteRequest(tenant_id="t", application_id="a", entity_id="m1", deleted_by="u")
+        )
+    stats = wrapper.operation_stats()
+    assert stats["delete_failure_total"] == 1
+
+
+# --- active_adapter_name public method ---
+
+def test_active_adapter_name_returns_configured_adapter() -> None:
+    wrapper = _build_wrapper(primary="stub_a")
+    assert wrapper.active_adapter_name() == "stub_a"

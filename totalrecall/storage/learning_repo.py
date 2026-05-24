@@ -8,6 +8,8 @@ import asyncpg
 
 from totalrecall.catalogue.models import CatalogueSource
 from totalrecall.learning.models import (
+    BulkDecisionResult,
+    DiscoverySearchResult,
     LearningApproval,
     LearningApprovalDecision,
     LearningDelta,
@@ -236,6 +238,148 @@ class PostgresLearningRepository:
                 tenant_id,
             )
         return result != "UPDATE 0"
+
+    async def search_discoveries(
+        self,
+        tenant_id: str,
+        *,
+        q: str | None = None,
+        status: str | None = None,
+        discovery_type: str | None = None,
+        confidence_min: float | None = None,
+        run_id: str | None = None,
+        limit: int = 50,
+    ) -> list[DiscoverySearchResult]:
+        conditions = ["d.tenant_id = $1"]
+        params: list[Any] = [tenant_id]
+        idx = 2
+
+        if q:
+            conditions.append(f"d.summary ILIKE '%' || ${idx} || '%'")
+            params.append(q)
+            idx += 1
+        if status:
+            conditions.append(f"d.status = ${idx}")
+            params.append(status)
+            idx += 1
+        if discovery_type:
+            conditions.append(f"d.discovery_type = ${idx}")
+            params.append(discovery_type)
+            idx += 1
+        if confidence_min is not None:
+            conditions.append(f"d.confidence >= ${idx}")
+            params.append(confidence_min)
+            idx += 1
+        if run_id:
+            conditions.append(f"d.run_id = ${idx}")
+            params.append(run_id)
+            idx += 1
+
+        where = " AND ".join(conditions)
+        sql = f"""
+            SELECT d.*, d.run_id AS _run_id
+            FROM learning_discoveries d
+            WHERE {where}
+            ORDER BY d.created_at DESC
+            LIMIT ${idx}
+        """
+        params.append(limit)
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+
+        results = []
+        for row in rows:
+            approval: LearningApproval | None = None
+            if row["approved_by"]:
+                approval = LearningApproval(
+                    decision=(
+                        LearningApprovalDecision.APPROVED
+                        if row["status"] == "approved"
+                        else LearningApprovalDecision.REJECTED
+                    ),
+                    actor_id=row["approved_by"],
+                    decided_at=row["approved_at"] or datetime.now(UTC),
+                    reason=row.get("rejection_reason"),
+                )
+            warnings_data = _parse_json(row["warnings"])
+            results.append(
+                DiscoverySearchResult(
+                    discovery_id=row["id"],
+                    run_id=row["run_id"],
+                    application_id=row["application_id"],
+                    discovery_type=LearningDiscoveryType(row["discovery_type"]),
+                    status=LearningDiscoveryStatus(row["status"]),
+                    summary=row["summary"],
+                    confidence=row["confidence"],
+                    delta_state=LearningDeltaState(row["delta_state"]),
+                    warnings=warnings_data if isinstance(warnings_data, list) else [],
+                    approval=approval,
+                )
+            )
+        return results
+
+    async def bulk_approve_discoveries(
+        self,
+        tenant_id: str,
+        discovery_ids: list[str],
+        actor_id: str,
+        reason: str | None = None,
+    ) -> BulkDecisionResult:
+        if not discovery_ids:
+            return BulkDecisionResult(processed=0, skipped=0)
+        now = datetime.now(UTC)
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                UPDATE learning_discoveries
+                SET status='approved', approved_by=$1, approved_at=$2, updated_at=$2
+                WHERE id = ANY($3::text[]) AND tenant_id=$4 AND status='discovered'
+                RETURNING id
+                """,
+                actor_id,
+                now,
+                discovery_ids,
+                tenant_id,
+            )
+        approved_ids = [r["id"] for r in rows]
+        return BulkDecisionResult(
+            processed=len(approved_ids),
+            skipped=len(discovery_ids) - len(approved_ids),
+            discovery_ids=approved_ids,
+        )
+
+    async def bulk_reject_discoveries(
+        self,
+        tenant_id: str,
+        discovery_ids: list[str],
+        actor_id: str,
+        reason: str | None = None,
+    ) -> BulkDecisionResult:
+        if not discovery_ids:
+            return BulkDecisionResult(processed=0, skipped=0)
+        now = datetime.now(UTC)
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                UPDATE learning_discoveries
+                SET status='rejected', approved_by=$1, approved_at=$2,
+                    rejection_reason=$3, updated_at=$2
+                WHERE id = ANY($4::text[]) AND tenant_id=$5 AND status='discovered'
+                RETURNING id
+                """,
+                actor_id,
+                now,
+                reason,
+                discovery_ids,
+                tenant_id,
+            )
+        rejected_ids = [r["id"] for r in rows]
+        return BulkDecisionResult(
+            processed=len(rejected_ids),
+            skipped=len(discovery_ids) - len(rejected_ids),
+            discovery_ids=rejected_ids,
+        )
 
     def _rows_to_report(self, run_row: Any, discovery_rows: list[Any]) -> LearningReport:
         scope_data = _parse_json(run_row["scope"])

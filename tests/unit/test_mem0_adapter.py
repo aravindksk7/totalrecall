@@ -7,11 +7,14 @@ import httpx
 import pytest
 from mem0 import MemoryClient
 
+from totalrecall.config.credentials import CredentialNotFoundError
+from totalrecall.memory.adapters.mem0_v1 import adapter as mem0_adapter_module
 from totalrecall.memory.adapters.mem0_v1.adapter import (
     Mem0V1Adapter,
     _extract_mem0_results,
     _mem0_filters,
     _mem0_user_id,
+    _Mem0OssHttpClient,
 )
 from totalrecall.memory.models import (
     MemoryDeleteRequest,
@@ -25,13 +28,25 @@ from totalrecall.memory.models import (
 
 
 class _CredentialProvider:
-    def __init__(self, value: str = "mem0-test-key") -> None:
+    def __init__(
+        self,
+        value: str = "mem0-test-key",
+        values: dict[str, str] | None = None,
+    ) -> None:
         self.value = value
+        self.values = values
         self.calls: list[str] = []
 
     def get(self, key: str) -> str:
         self.calls.append(key)
-        return self.value
+        if self.values is not None:
+            value = self.values.get(key)
+            if value is None:
+                raise CredentialNotFoundError(f"missing {key}")
+            return value
+        if key == "mem0_api_key":
+            return self.value
+        raise CredentialNotFoundError(f"missing {key}")
 
 
 class _Mem0Transport(httpx.BaseTransport):
@@ -84,6 +99,43 @@ class _Mem0Transport(httpx.BaseTransport):
             return httpx.Response(200, json=self.get_result, request=request)
 
         if request.url.path.startswith("/v1/memories/") and request.method == "DELETE":
+            return httpx.Response(200, json={"deleted": True}, request=request)
+
+        return httpx.Response(404, json={"detail": request.url.path}, request=request)
+
+
+class _Mem0OssTransport(httpx.BaseTransport):
+    def __init__(self) -> None:
+        self.requests: list[httpx.Request] = []
+        self.search_results: list[dict[str, Any]] = [
+            {
+                "id": "mem_remote_001",
+                "memory": "Login uses role button.",
+                "metadata": {"domain": "auth"},
+            }
+        ]
+        self.add_result: dict[str, Any] = {
+            "id": "mem_remote_002",
+            "memory": "Checkout: Checkout starts at /checkout.",
+            "metadata": {"domain": "checkout"},
+        }
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+
+        if request.url.path == "/auth/setup-status" and request.method == "GET":
+            return httpx.Response(200, json={"setup_required": False}, request=request)
+
+        if request.url.path == "/search" and request.method == "POST":
+            return httpx.Response(200, json={"results": self.search_results}, request=request)
+
+        if request.url.path == "/memories" and request.method == "POST":
+            return httpx.Response(200, json={"results": [self.add_result]}, request=request)
+
+        if request.url.path.startswith("/memories/") and request.method == "GET":
+            return httpx.Response(200, json=self.search_results[0], request=request)
+
+        if request.url.path.startswith("/memories/") and request.method == "DELETE":
             return httpx.Response(200, json={"deleted": True}, request=request)
 
         return httpx.Response(404, json={"detail": request.url.path}, request=request)
@@ -285,6 +337,106 @@ def test_health_returns_ok_when_client_initializes() -> None:
 
     assert health.status == MemoryHealthStatus.OK
     assert health.adapter_version == "mem0_v1"
+
+
+def test_client_uses_self_hosted_mem0_host_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import builtins
+
+    created_clients: list[dict[str, str | None]] = []
+    real_import = builtins.__import__
+
+    class FakeOssClient:
+        def __init__(self, api_key: str, host: str | None = None) -> None:
+            created_clients.append({"api_key": api_key, "host": host})
+
+        def health(self) -> None:
+            return None
+
+    def guarded_import(name: str, *args: object, **kwargs: object) -> Any:
+        if name == "mem0":
+            raise ImportError("platform sdk should not be required for self-hosted")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    monkeypatch.setattr(mem0_adapter_module, "_Mem0OssHttpClient", FakeOssClient)
+    adapter = Mem0V1Adapter(
+        _CredentialProvider(
+            values={
+                "mem0_api_key": "mem0-test-key",
+                "mem0_host": "http://localhost:8888/",
+            }
+        )
+    )
+
+    health = adapter.health()
+
+    assert health.status == MemoryHealthStatus.OK
+    assert created_clients == [
+        {"api_key": "mem0-test-key", "host": "http://localhost:8888"}
+    ]
+
+
+def test_self_hosted_client_uses_oss_paths_and_api_key_header() -> None:
+    transport = _Mem0OssTransport()
+    http_client = httpx.Client(transport=transport)
+    oss_client = _Mem0OssHttpClient(
+        api_key="mem0-test-key",
+        host="http://mem0.example.test",
+        client=http_client,
+    )
+    adapter = Mem0V1Adapter(_CredentialProvider(), client=oss_client)
+
+    adapter.health()
+    adapter.search(
+        MemorySearchRequest(
+            tenant_id="t1",
+            application_id="app1",
+            query="login",
+            filters={"domain": "auth"},
+            limit=3,
+        )
+    )
+    adapter.upsert(
+        MemoryUpsertRequest(
+            memory=MemoryEntry(
+                entity_id="mem_local",
+                tenant_id="t1",
+                application_id="app1",
+                summary="Checkout",
+                knowledge="Checkout starts at /checkout.",
+                tags={"domain": "checkout"},
+            )
+        )
+    )
+    adapter.get(MemoryGetRequest(tenant_id="t1", application_id="app1", entity_id="m1"))
+    adapter.delete(
+        MemoryDeleteRequest(
+            tenant_id="t1",
+            application_id="app1",
+            entity_id="m1",
+            deleted_by="actor_admin",
+        )
+    )
+
+    assert [request.url.path for request in transport.requests] == [
+        "/auth/setup-status",
+        "/search",
+        "/memories",
+        "/memories/m1",
+        "/memories/m1",
+    ]
+    assert {request.headers["x-api-key"] for request in transport.requests} == {
+        "mem0-test-key"
+    }
+    search_body = _json_body(transport.requests[1])
+    assert search_body == {
+        "query": "login",
+        "user_id": "t1::app1",
+        "filters": {"domain": "auth"},
+        "top_k": 3,
+    }
 
 
 def test_health_returns_unavailable_without_mem0(

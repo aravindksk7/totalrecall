@@ -52,6 +52,7 @@ def test_monitoring_summary_returns_memory_provider_and_token_state(tmp_path) ->
     assert body["memory"]["configured_adapter"] == "stub"
     assert body["memory"]["operations"]["search_total"] == 0
     assert body["memory"]["mem0"]["credential_configured"] is False
+    assert body["memory"]["mem0"]["host_configured"] is False
     assert body["token_efficiency"]["generations_total"] == 0
     provider_ids = {provider["provider_id"] for provider in body["providers"]}
     assert {"stub", "openai", "local", "claude", "gemini"} <= provider_ids

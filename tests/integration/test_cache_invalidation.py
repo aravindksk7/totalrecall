@@ -14,10 +14,19 @@ from totalrecall.memory.models import MemoryEntry
 from totalrecall.memory.tombstone import TombstoneFilter
 
 
-def _settings() -> Settings:
+def _settings(tmp_path=None) -> Settings:
+    import tempfile
+    from pathlib import Path
+
+    secrets_dir = (
+        Path(tmp_path) / "local-secrets"
+        if tmp_path is not None
+        else Path(tempfile.mkdtemp()) / "local-secrets"
+    )
     return Settings(
         environment="test",
         enable_database=False,
+        local_secrets_dir=secrets_dir,
         auth_tokens={
             "admin-token": AuthTokenConfig(
                 tenant_id="tenant_cache",
@@ -41,10 +50,10 @@ def _stub_entry(entity_id: str = "mem_login") -> MemoryEntry:
     )
 
 
-def test_memory_search_populates_cache() -> None:
+def test_memory_search_populates_cache(tmp_path) -> None:
     """After a search, the result is stored in the cache."""
     entry = _stub_entry()
-    app = create_app(_settings())
+    app = create_app(_settings(tmp_path))
     # Replace stub adapter with one that has a known entry
     app.state.memory_wrapper._adapters["stub"] = StubMemoryAdapter([entry])
     cache: TTLCache = app.state.cache
@@ -67,13 +76,13 @@ def test_memory_search_populates_cache() -> None:
     assert cache.size >= 1
 
 
-def test_cache_invalidated_on_memory_delete() -> None:
+def test_cache_invalidated_on_memory_delete(tmp_path) -> None:
     """Memory delete clears the search cache for that tenant/application."""
     cache = TTLCache(ttl_seconds=300)
     cache_key = build_search_cache_key("tenant_cache", "app_cache", "query", {}, 10)
     cache.set(cache_key, "cached_result")
 
-    app = create_app(_settings())
+    app = create_app(_settings(tmp_path))
     app.state.cache = cache
 
     tombstone_filter = TombstoneFilter()
@@ -99,7 +108,7 @@ def test_cache_invalidated_on_memory_delete() -> None:
     assert cache.get(cache_key) is None
 
 
-def test_cache_invalidation_only_affects_correct_tenant() -> None:
+def test_cache_invalidation_only_affects_correct_tenant(tmp_path) -> None:
     """Invalidation for tenant_cache:app_cache leaves other tenants' cache intact."""
     cache = TTLCache(ttl_seconds=300)
     key_target = build_search_cache_key("tenant_cache", "app_cache", "q", {}, 10)
@@ -107,7 +116,7 @@ def test_cache_invalidation_only_affects_correct_tenant() -> None:
     cache.set(key_target, "for_target")
     cache.set(key_other, "for_other")
 
-    app = create_app(_settings())
+    app = create_app(_settings(tmp_path))
     app.state.cache = cache
 
     tombstone_filter = TombstoneFilter()

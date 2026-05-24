@@ -97,3 +97,102 @@ def test_external_feature_flags_fall_back_on_fetch_error() -> None:
 
     assert provider.get_string("memory.adapter") == "stub"
     assert provider.last_error is not None
+
+
+def test_config_flag_get_bool_with_numeric_truthy_value() -> None:
+    provider = ConfigFeatureFlagProvider({"count": 1})
+
+    assert provider.get_bool("count") is True
+
+
+def test_config_flag_get_bool_with_zero_is_falsy() -> None:
+    provider = ConfigFeatureFlagProvider({"count": 0})
+
+    assert provider.get_bool("count") is False
+
+
+def test_external_flags_raises_on_empty_url() -> None:
+    import pytest
+    from totalrecall.config.feature_flags import ExternalFeatureFlagProvider
+
+    with pytest.raises(ValueError, match="URL"):
+        ExternalFeatureFlagProvider("", fallback=ConfigFeatureFlagProvider({}))
+
+
+def test_external_flags_raises_on_zero_timeout() -> None:
+    import pytest
+    from totalrecall.config.feature_flags import ExternalFeatureFlagProvider
+
+    with pytest.raises(ValueError, match="timeout"):
+        ExternalFeatureFlagProvider(
+            "https://flags.example.test",
+            fallback=ConfigFeatureFlagProvider({}),
+            timeout_seconds=0,
+        )
+
+
+def test_external_flags_raises_on_negative_cache_ttl() -> None:
+    import pytest
+    from totalrecall.config.feature_flags import ExternalFeatureFlagProvider
+
+    with pytest.raises(ValueError, match="cache TTL"):
+        ExternalFeatureFlagProvider(
+            "https://flags.example.test",
+            fallback=ConfigFeatureFlagProvider({}),
+            cache_ttl_seconds=-1,
+        )
+
+
+def test_external_flags_cache_expires_and_refetches() -> None:
+    count = 0
+    tick = 0.0
+
+    def opener(request: Request, timeout: int) -> _Response:
+        nonlocal count
+        count += 1
+        return _Response('{"values": {"key": "v1"}}')
+
+    provider = ExternalFeatureFlagProvider(
+        "https://flags.example.test",
+        fallback=ConfigFeatureFlagProvider({}),
+        opener=opener,
+        cache_ttl_seconds=10,
+        clock=lambda: tick,
+    )
+
+    provider.get_string("key")
+    tick = 11.0  # past TTL
+    provider.get_string("key")
+    assert count == 2
+
+
+def test_external_flags_falls_back_on_invalid_json() -> None:
+    provider = ExternalFeatureFlagProvider(
+        "https://flags.example.test",
+        fallback=ConfigFeatureFlagProvider({"key": "fallback"}),
+        opener=lambda r, timeout: _Response("not-json{{{"),
+    )
+
+    assert provider.get_string("key") == "fallback"
+    assert provider.last_error is not None
+
+
+def test_external_flags_falls_back_on_non_dict_response() -> None:
+    provider = ExternalFeatureFlagProvider(
+        "https://flags.example.test",
+        fallback=ConfigFeatureFlagProvider({"key": "fallback"}),
+        opener=lambda r, timeout: _Response("[1,2,3]"),
+    )
+
+    assert provider.get_string("key") == "fallback"
+    assert provider.last_error is not None
+
+
+def test_external_flags_raw_flags_object_without_values_key() -> None:
+    provider = ExternalFeatureFlagProvider(
+        "https://flags.example.test",
+        fallback=ConfigFeatureFlagProvider({}),
+        opener=lambda r, timeout: _Response('{"memory.adapter":"mem0_v1"}'),
+    )
+
+    assert provider.get_string("memory.adapter") == "mem0_v1"

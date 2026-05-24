@@ -11,6 +11,7 @@ from totalrecall.api.routes import (
     generations,
     health,
     learning,
+    mem0,
     memories,
     monitoring,
     skills,
@@ -229,6 +230,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(learning.router, prefix="/v1")
     app.include_router(skills.router, prefix="/v1")
     app.include_router(credentials.router, prefix="/v1")
+    app.include_router(mem0.router, prefix="/v1")
     app.include_router(monitoring.router, prefix="/v1")
 
     return app

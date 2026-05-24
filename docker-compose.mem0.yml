@@ -1,0 +1,100 @@
+x-mem0-env: &mem0-env
+  OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY before starting self-hosted Mem0}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+  JWT_SECRET: ${MEM0_JWT_SECRET:-dev-totalrecall-mem0-jwt-secret-change-me-1234567890}
+  ADMIN_API_KEY: ${MEM0_ADMIN_API_KEY:-dev-totalrecall-mem0-admin-key}
+  AUTH_DISABLED: ${MEM0_AUTH_DISABLED:-false}
+  DASHBOARD_URL: ${MEM0_DASHBOARD_URL:-http://localhost:3000}
+  APP_DB_NAME: ${MEM0_APP_DB_NAME:-mem0_app}
+  POSTGRES_HOST: mem0-postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: postgres
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  MEM0_TELEMETRY: ${MEM0_TELEMETRY:-false}
+  MEM0_DIR: ${MEM0_DIR:-/app/history}
+  HISTORY_DB_PATH: ${MEM0_HISTORY_DB_PATH:-/app/history/history.db}
+
+x-totalrecall-mem0-env: &totalrecall-mem0-env
+  TOTALRECALL_FEATURE_FLAGS: '{"memory.adapter":"mem0_v1","memory.write_enabled":true,"memory.fail_open_on_search":true}'
+  TOTALRECALL_CREDENTIAL_REFS: '{"mem0_api_key":"env:MEM0_API_KEY","mem0_host":"env:MEM0_HOST"}'
+  MEM0_API_KEY: ${MEM0_ADMIN_API_KEY:-dev-totalrecall-mem0-admin-key}
+  MEM0_HOST: http://mem0:8000
+
+services:
+  mem0-postgres:
+    image: ankane/pgvector:v0.5.1
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "8432:5432"
+    volumes:
+      - mem0-postgres-data:/var/lib/postgresql/data
+      - ./docker/mem0-init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-q", "-d", "postgres", "-U", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mem0:
+    image: ${MEM0_API_IMAGE:-totalrecall-mem0-api-server:latest}
+    build:
+      context: .
+      dockerfile: docker/mem0-api.Dockerfile
+      args:
+        MEM0_REF: ${MEM0_REF:-main}
+    environment:
+      <<: *mem0-env
+    depends_on:
+      mem0-postgres:
+        condition: service_healthy
+    ports:
+      - "8888:8000"
+    volumes:
+      - mem0-history-data:/app/history
+    command:
+      [
+        "sh",
+        "-c",
+        "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/auth/setup-status', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  app:
+    environment:
+      <<: *totalrecall-mem0-env
+    depends_on:
+      mem0:
+        condition: service_healthy
+
+  memory-wrapper:
+    environment:
+      <<: *totalrecall-mem0-env
+    depends_on:
+      mem0:
+        condition: service_healthy
+
+  test:
+    environment:
+      <<: *totalrecall-mem0-env
+    depends_on:
+      mem0:
+        condition: service_healthy
+
+volumes:
+  mem0-postgres-data:
+  mem0-history-data:

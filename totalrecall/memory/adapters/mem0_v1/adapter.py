@@ -5,7 +5,9 @@ No code outside totalrecall/memory/adapters/mem0_v1/ may import from mem0.
 
 from typing import Any
 
-from totalrecall.config.credentials import CredentialProvider
+import httpx
+
+from totalrecall.config.credentials import CredentialNotFoundError, CredentialProvider
 from totalrecall.memory.models import (
     MemoryCapabilities,
     MemoryDeleteRequest,
@@ -28,6 +30,59 @@ _MEM0_NOT_INSTALLED = (
 _ADAPTER_VERSION = "mem0_v1"
 
 
+class _Mem0OssHttpClient:
+    """Small client for the self-hosted Mem0 OSS REST server."""
+
+    def __init__(
+        self,
+        api_key: str,
+        host: str,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self._client = client or httpx.Client(timeout=300)
+        self._client.base_url = httpx.URL(host.rstrip("/"))
+        self._client.headers.update({"X-API-Key": api_key})
+
+    def health(self) -> None:
+        response = self._client.get("/auth/setup-status")
+        response.raise_for_status()
+
+    def search(
+        self,
+        query: str,
+        filters: dict[str, Any] | None = None,
+        top_k: int | None = None,
+    ) -> Any:
+        payload = _mem0_oss_search_payload(query, filters or {}, top_k)
+        response = self._client.post("/search", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def add(
+        self,
+        messages: list[dict[str, str]],
+        user_id: str,
+        metadata: dict[str, str] | None = None,
+        **_: Any,
+    ) -> Any:
+        payload: dict[str, Any] = {"messages": messages, "user_id": user_id}
+        if metadata:
+            payload["metadata"] = metadata
+        response = self._client.post("/memories", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def get(self, memory_id: str) -> Any:
+        response = self._client.get(f"/memories/{memory_id}")
+        response.raise_for_status()
+        return response.json()
+
+    def delete(self, memory_id: str) -> Any:
+        response = self._client.delete(f"/memories/{memory_id}")
+        response.raise_for_status()
+        return response.json()
+
+
 def _mem0_user_id(tenant_id: str, application_id: str) -> str:
     """Scopes Mem0 user_id to the TotalRecall tenant+application namespace."""
     return f"{tenant_id}::{application_id}"
@@ -45,24 +100,48 @@ class Mem0V1Adapter:
         self,
         credential_provider: CredentialProvider,
         credential_ref: str = "mem0_api_key",
+        host_credential_ref: str | None = "mem0_host",
         host: str | None = None,
         client: Any | None = None,
     ) -> None:
         self._credential_provider = credential_provider
         self._credential_ref = credential_ref
+        self._host_credential_ref = host_credential_ref
         self._host = host
         self._client: Any = client
+        self._client_injected = client is not None
+        self._client_config: tuple[str, str | None] | None = None
 
     def _get_client(self) -> Any:
-        if self._client is not None:
+        if self._client is not None and self._client_injected:
+            return self._client
+        api_key = self._credential_provider.get(self._credential_ref)
+        host = self._resolved_host()
+        client_config = (api_key, host)
+        if self._client is not None and self._client_config == client_config:
+            return self._client
+        if host:
+            self._client = _Mem0OssHttpClient(api_key=api_key, host=host)
+            self._client_config = client_config
             return self._client
         try:
             from mem0 import MemoryClient  # noqa: PLC0415
         except ImportError as exc:
             raise ImportError(_MEM0_NOT_INSTALLED) from exc
-        api_key = self._credential_provider.get(self._credential_ref)
-        self._client = MemoryClient(api_key=api_key, host=self._host)
+        self._client = MemoryClient(api_key=api_key, host=host)
+        self._client_config = client_config
         return self._client
+
+    def _resolved_host(self) -> str | None:
+        if self._host:
+            return self._host.rstrip("/")
+        if self._host_credential_ref is None:
+            return None
+        try:
+            host = self._credential_provider.get(self._host_credential_ref).strip()
+        except CredentialNotFoundError:
+            return None
+        return host.rstrip("/") if host else None
 
     def search(self, request: MemorySearchRequest) -> MemorySearchResult:
         client = self._get_client()
@@ -132,7 +211,9 @@ class Mem0V1Adapter:
 
     def health(self) -> MemoryHealth:
         try:
-            self._get_client()
+            client = self._get_client()
+            if hasattr(client, "health"):
+                client.health()
             return MemoryHealth(status=MemoryHealthStatus.OK, adapter_version=self.adapter_version)
         except ImportError:
             return MemoryHealth(
@@ -195,6 +276,29 @@ def _mem0_filters(user_id: str, filters: dict[str, Any]) -> dict[str, Any]:
 
     tag_filters = [{key: value} for key, value in filters.items()]
     return {"AND": [{"user_id": user_id}, *tag_filters]}
+
+
+def _mem0_oss_search_payload(
+    query: str,
+    filters: dict[str, Any],
+    top_k: int | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"query": query}
+    metadata_filters: dict[str, Any] = {}
+    clauses = filters.get("AND") if isinstance(filters.get("AND"), list) else [filters]
+    for clause in clauses:
+        if not isinstance(clause, dict):
+            continue
+        for key, value in clause.items():
+            if key == "user_id":
+                payload["user_id"] = value
+            else:
+                metadata_filters[key] = value
+    if metadata_filters:
+        payload["filters"] = metadata_filters
+    if top_k is not None:
+        payload["top_k"] = top_k
+    return payload
 
 
 def _extract_mem0_results(raw_response: Any) -> list[Any]:

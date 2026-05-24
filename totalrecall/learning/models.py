@@ -105,3 +105,22 @@ class LearningReport(ContractModel):
     unchanged_count: int = Field(ge=0)
     rejected_count: int = Field(ge=0)
     warnings: list[str] = Field(default_factory=list)
+
+
+class DiscoverySearchResult(ContractModel):
+    discovery_id: str
+    run_id: str
+    application_id: str
+    discovery_type: LearningDiscoveryType
+    status: LearningDiscoveryStatus
+    summary: str
+    confidence: float
+    delta_state: LearningDeltaState
+    warnings: list[str] = Field(default_factory=list)
+    approval: LearningApproval | None = None
+
+
+class BulkDecisionResult(ContractModel):
+    processed: int
+    skipped: int
+    discovery_ids: list[str] = Field(default_factory=list)

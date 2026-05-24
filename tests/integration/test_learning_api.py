@@ -21,7 +21,6 @@ from totalrecall.learning.models import (
     LearningScope,
     LearningTriggerType,
 )
-from totalrecall.learning.promotion import discovery_to_entry
 from totalrecall.main import create_app
 
 
@@ -184,6 +183,44 @@ def test_trigger_run_succeeds_for_maintainer(tmp_path) -> None:
     assert body["discovered_count"] >= 1
 
 
+def test_trigger_run_maps_host_path_before_scanning(tmp_path) -> None:
+    mapped_root = tmp_path / "test-env-management" / "tests"
+    mapped_root.mkdir(parents=True)
+    (mapped_root / "login.spec.ts").write_text(
+        "class LoginPage {}\ntest('login works', async () => {})\n",
+        encoding="utf-8",
+    )
+    settings = _make_settings()
+    settings.learning_path_mappings = {"C:\\ENV": str(tmp_path)}
+    app = create_app(settings)
+    learning_repo = _make_learning_repo()
+    audit_repo = _make_audit_repo()
+    app.dependency_overrides[get_learning_repo] = lambda: learning_repo
+    app.dependency_overrides[get_audit_repo] = lambda: audit_repo
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/learning/runs",
+            json={
+                "application_id": "app_test",
+                "scope": {
+                    "repository": "local",
+                    "branch": "main",
+                    "path": "C:\\ENV\\test-env-management\\tests",
+                    "framework": "playwright",
+                },
+            },
+            headers={"Authorization": "Bearer test-admin"},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["run"]["status"] == "completed"
+    assert body["run"]["scope"]["path"] == str(mapped_root)
+    assert body["discovered_count"] >= 1
+    assert "Mapped learning path from C:\\ENV\\test-env-management\\tests" in body["warnings"][0]
+
+
 def test_trigger_run_saves_to_repo(tmp_path) -> None:
     settings = _make_settings()
     app = create_app(settings)
@@ -339,3 +376,196 @@ def test_approve_discovery_does_not_promote_catalogue_reference() -> None:
     assert response.status_code == 200
     assert response.json()["promoted"] is False
     catalogue_repo.upsert.assert_not_called()
+
+
+# --- Discovery search and bulk action tests ---
+
+
+def _make_search_repo(results=None, bulk_result=None) -> MagicMock:
+    from totalrecall.learning.models import BulkDecisionResult
+
+    repo = _make_learning_repo()
+    repo.search_discoveries = AsyncMock(return_value=results or [])
+    default_bulk = BulkDecisionResult(processed=1, skipped=0, discovery_ids=["disc_001"])
+    repo.bulk_approve_discoveries = AsyncMock(return_value=bulk_result or default_bulk)
+    repo.bulk_reject_discoveries = AsyncMock(return_value=bulk_result or default_bulk)
+    return repo
+
+
+def test_search_discoveries_returns_empty_list(tmp_path) -> None:
+    settings = _make_settings()
+    app = create_app(settings)
+    repo = _make_search_repo()
+    app.dependency_overrides[get_learning_repo] = lambda: repo
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/learning/discoveries",
+            headers={"Authorization": "Bearer test-admin"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_search_discoveries_passes_filters_to_repo(tmp_path) -> None:
+    from totalrecall.learning.models import DiscoverySearchResult, LearningDiscoveryStatus, LearningDiscoveryType, LearningDeltaState
+
+    settings = _make_settings()
+    app = create_app(settings)
+    item = DiscoverySearchResult(
+        discovery_id="disc_001",
+        run_id="run_001",
+        application_id="app_test",
+        discovery_type=LearningDiscoveryType.STATIC_SKILL_CANDIDATE,
+        status=LearningDiscoveryStatus.DISCOVERED,
+        summary="LoginPage login validation",
+        confidence=0.9,
+        delta_state=LearningDeltaState.NEW,
+    )
+    repo = _make_search_repo(results=[item])
+    app.dependency_overrides[get_learning_repo] = lambda: repo
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/learning/discoveries?q=login&status=discovered&confidence_min=0.5&limit=10",
+            headers={"Authorization": "Bearer test-admin"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["discovery_id"] == "disc_001"
+    assert body[0]["summary"] == "LoginPage login validation"
+    repo.search_discoveries.assert_awaited_once()
+    call_kwargs = repo.search_discoveries.call_args.kwargs
+    assert call_kwargs["q"] == "login"
+    assert call_kwargs["status"] == "discovered"
+    assert call_kwargs["confidence_min"] == pytest.approx(0.5)
+    assert call_kwargs["limit"] == 10
+
+
+def test_search_discoveries_requires_auth(tmp_path) -> None:
+    settings = _make_settings()
+    app = create_app(settings)
+    repo = _make_search_repo()
+    app.dependency_overrides[get_learning_repo] = lambda: repo
+
+    with TestClient(app) as client:
+        response = client.get("/v1/learning/discoveries")
+
+    assert response.status_code == 401
+
+
+def test_bulk_approve_requires_permission() -> None:
+    settings = _make_settings()
+    app = create_app(settings)
+    repo = _make_search_repo()
+    audit_repo = _make_audit_repo()
+    catalogue_repo = _make_catalogue_repo()
+    app.dependency_overrides[get_learning_repo] = lambda: repo
+    app.dependency_overrides[get_audit_repo] = lambda: audit_repo
+    app.dependency_overrides[get_catalogue_repo] = lambda: catalogue_repo
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/learning/discoveries/bulk-approve",
+            json={"discovery_ids": ["disc_001"]},
+            headers={"Authorization": "Bearer test-reader"},
+        )
+
+    assert response.status_code == 403
+
+
+def test_bulk_approve_returns_processed_count() -> None:
+    from totalrecall.learning.models import BulkDecisionResult
+
+    settings = _make_settings()
+    app = create_app(settings)
+    bulk_result = BulkDecisionResult(processed=2, skipped=1, discovery_ids=["disc_001", "disc_002"])
+    repo = _make_search_repo(bulk_result=bulk_result)
+    audit_repo = _make_audit_repo()
+    catalogue_repo = _make_catalogue_repo()
+    app.dependency_overrides[get_learning_repo] = lambda: repo
+    app.dependency_overrides[get_audit_repo] = lambda: audit_repo
+    app.dependency_overrides[get_catalogue_repo] = lambda: catalogue_repo
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/learning/discoveries/bulk-approve",
+            json={"discovery_ids": ["disc_001", "disc_002", "disc_003"], "reason": "batch approval"},
+            headers={"Authorization": "Bearer test-admin"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["processed"] == 2
+    assert body["skipped"] == 1
+    repo.bulk_approve_discoveries.assert_awaited_once()
+
+
+def test_bulk_approve_rejects_empty_list() -> None:
+    settings = _make_settings()
+    app = create_app(settings)
+    repo = _make_search_repo()
+    audit_repo = _make_audit_repo()
+    catalogue_repo = _make_catalogue_repo()
+    app.dependency_overrides[get_learning_repo] = lambda: repo
+    app.dependency_overrides[get_audit_repo] = lambda: audit_repo
+    app.dependency_overrides[get_catalogue_repo] = lambda: catalogue_repo
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/learning/discoveries/bulk-approve",
+            json={"discovery_ids": []},
+            headers={"Authorization": "Bearer test-admin"},
+        )
+
+    assert response.status_code == 400
+
+
+def test_bulk_reject_returns_processed_count() -> None:
+    from totalrecall.learning.models import BulkDecisionResult
+
+    settings = _make_settings()
+    app = create_app(settings)
+    bulk_result = BulkDecisionResult(processed=3, skipped=0, discovery_ids=["d1", "d2", "d3"])
+    repo = _make_search_repo(bulk_result=bulk_result)
+    audit_repo = _make_audit_repo()
+    app.dependency_overrides[get_learning_repo] = lambda: repo
+    app.dependency_overrides[get_audit_repo] = lambda: audit_repo
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/learning/discoveries/bulk-reject",
+            json={"discovery_ids": ["d1", "d2", "d3"], "reason": "not relevant"},
+            headers={"Authorization": "Bearer test-admin"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["processed"] == 3
+    assert body["skipped"] == 0
+    repo.bulk_reject_discoveries.assert_awaited_once()
+
+
+def test_bulk_approve_records_audit_event() -> None:
+    settings = _make_settings()
+    app = create_app(settings)
+    repo = _make_search_repo()
+    audit_repo = _make_audit_repo()
+    catalogue_repo = _make_catalogue_repo()
+    app.dependency_overrides[get_learning_repo] = lambda: repo
+    app.dependency_overrides[get_audit_repo] = lambda: audit_repo
+    app.dependency_overrides[get_catalogue_repo] = lambda: catalogue_repo
+
+    with TestClient(app) as client:
+        client.post(
+            "/v1/learning/discoveries/bulk-approve",
+            json={"discovery_ids": ["disc_001"]},
+            headers={"Authorization": "Bearer test-admin"},
+        )
+
+    audit_repo.record.assert_awaited_once()
+    call_kwargs = audit_repo.record.call_args.kwargs
+    assert call_kwargs["event_type"] == "learning.discoveries.bulk_approved"

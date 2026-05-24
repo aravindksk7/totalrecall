@@ -1,11 +1,13 @@
-"""Unit tests for the learning scanner, parser, classifier, and redactor."""
+"""Unit tests for the learning scanner, parser, classifier, redactor, and paths."""
 
 from pathlib import Path  # noqa: I001
 import textwrap
+from unittest.mock import patch
 
 from totalrecall.learning.classifier import classify
 from totalrecall.learning.models import LearningDiscoveryType
 from totalrecall.learning.parser import ExtractedPattern, extract_patterns
+from totalrecall.learning.paths import resolve_learning_path
 from totalrecall.learning.redactor import redact
 from totalrecall.learning.scanner import scan_path
 
@@ -219,3 +221,148 @@ def test_redactor_returns_warnings_for_each_pattern_that_fires() -> None:
     _, warnings = redact(text)
 
     assert len(warnings) >= 1
+
+
+# --- scanner: edge cases ---
+
+
+def test_scan_path_skips_file_exceeding_size_limit(tmp_path: Path) -> None:
+    big_file = tmp_path / "large.py"
+    big_file.write_bytes(b"x = 1\n" * (256 * 1024 // 6 + 10))  # just over 256 KB
+
+    files = scan_path(tmp_path)
+
+    assert not any(f.path.name == "large.py" for f in files)
+
+
+def test_scan_path_skips_unreadable_file(tmp_path: Path) -> None:
+    (tmp_path / "normal.py").write_text("class A: pass")
+    (tmp_path / "unreadable.py").write_text("class B: pass")
+
+    original_read_text = Path.read_text
+
+    def _patched_read_text(self, *args, **kwargs):
+        if self.name == "unreadable.py":
+            raise OSError("permission denied")
+        return original_read_text(self, *args, **kwargs)
+
+    with patch.object(Path, "read_text", _patched_read_text):
+        files = scan_path(tmp_path)
+
+    assert len(files) == 1
+    assert files[0].path.name == "normal.py"
+
+
+# --- parser: additional fixture decorator forms ---
+
+
+def test_parser_bare_fixture_decorator(tmp_path: Path) -> None:
+    src = textwrap.dedent("""\
+        from pytest import fixture
+
+        @fixture
+        def page_context():
+            yield None
+    """)
+    path = tmp_path / "conftest.py"
+
+    patterns = extract_patterns(src, path, "python")
+
+    assert any(p.pattern_type == "fixture_function" and p.name == "page_context" for p in patterns)
+
+
+def test_parser_fixture_with_scope_arg_name_form(tmp_path: Path) -> None:
+    src = textwrap.dedent("""\
+        from pytest import fixture
+
+        @fixture(scope="module")
+        def db_connection():
+            yield None
+    """)
+    path = tmp_path / "conftest.py"
+
+    patterns = extract_patterns(src, path, "python")
+
+    assert any(p.pattern_type == "fixture_function" and p.name == "db_connection" for p in patterns)
+
+
+def test_parser_pytest_fixture_with_scope_arg(tmp_path: Path) -> None:
+    src = textwrap.dedent("""\
+        import pytest
+
+        @pytest.fixture(scope="session")
+        def browser():
+            yield None
+    """)
+    path = tmp_path / "conftest.py"
+
+    patterns = extract_patterns(src, path, "python")
+
+    assert any(p.pattern_type == "fixture_function" and p.name == "browser" for p in patterns)
+
+
+def test_parser_returns_empty_for_unknown_language(tmp_path: Path) -> None:
+    path = tmp_path / "style.css"
+    patterns = extract_patterns("body { color: red; }", path, "css")
+
+    assert patterns == []
+
+
+# --- paths: resolve_learning_path ---
+
+
+def test_resolve_learning_path_returns_original_when_no_mappings() -> None:
+    result = resolve_learning_path("/repo/tests", {})
+    assert result.path == "/repo/tests"
+    assert result.warnings == []
+
+
+def test_resolve_learning_path_returns_empty_when_path_is_blank() -> None:
+    result = resolve_learning_path("   ", {"/repo": "/mount"})
+    assert result.path == ""
+    assert result.warnings == []
+
+
+def test_resolve_learning_path_skips_blank_mapping_entries() -> None:
+    # Blank source key must be skipped; the path has no other matching mapping.
+    result = resolve_learning_path(
+        "/repo/tests",
+        {"": "/should-be-skipped"},
+    )
+    assert result.path == "/repo/tests"
+    assert result.warnings == []
+
+
+def test_resolve_learning_path_returns_original_when_no_mapping_matches() -> None:
+    result = resolve_learning_path("/other/path", {"/repo": "/mount"})
+    assert result.path == "/other/path"
+    assert result.warnings == []
+
+
+def test_resolve_learning_path_posix_mapping() -> None:
+    result = resolve_learning_path("/repo/tests", {"/repo": "/mount"})
+    assert result.path == "/mount/tests"
+    assert len(result.warnings) == 1
+
+
+def test_resolve_learning_path_relative_target() -> None:
+    result = resolve_learning_path("/repo/tests", {"/repo": "relative/target"})
+    assert "tests" in result.path
+    assert len(result.warnings) == 1
+
+
+def test_resolve_learning_path_windows_source_and_target() -> None:
+    result = resolve_learning_path(
+        r"C:\repo\tests",
+        {r"C:\repo": r"D:\mount"},
+    )
+    assert result.path == r"D:\mount\tests"
+    assert len(result.warnings) == 1
+
+
+def test_resolve_learning_path_windows_case_insensitive() -> None:
+    result = resolve_learning_path(
+        r"C:\Repo\Tests",
+        {r"C:\repo": r"D:\mount"},
+    )
+    assert result.path == r"D:\mount\Tests"

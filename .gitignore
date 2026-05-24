@@ -5,8 +5,15 @@ __pycache__/
 *.pyc
 .env
 local-secrets/
+learning-workspace/
 node_modules/
 **/node_modules/
+
+# Test and verification artifacts
+.coverage
+verify_*.png
+verify_*.js
+verify_*.ts
 
 # Local assistant, IDE, and repo-private metadata
 .claude/

@@ -9,9 +9,10 @@ from totalrecall.main import create_app
 
 
 @pytest.fixture
-def settings() -> Settings:
+def settings(tmp_path) -> Settings:
     return Settings(
         environment="test",
+        local_secrets_dir=tmp_path / "secrets",
         auth_tokens={
             "test-admin": AuthTokenConfig(
                 tenant_id="tenant_test",

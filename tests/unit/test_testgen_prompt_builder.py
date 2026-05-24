@@ -139,3 +139,18 @@ class TestTestGenPromptBuilder:
         messages = builder.build(_make_request(), _make_plan(), _make_intent(), [TestType.REGRESSION])
         user_text = next(m.content for m in messages if m.role == ProviderRole.USER)
         assert "Regression Tests" in user_text
+
+    def test_user_message_includes_jira_story_description(self):
+        story = JiraStory(
+            jira_key="AUTH-2",
+            summary="User can log in",
+            description="This covers the standard login flow with email and password.",
+            acceptance_criteria=[],
+            fetched_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        builder = TestGenPromptBuilder()
+        messages = builder.build(
+            _make_request(), _make_plan(jira_story=story), _make_intent(), [TestType.FUNCTIONAL]
+        )
+        user_text = next(m.content for m in messages if m.role == ProviderRole.USER)
+        assert "This covers the standard login flow" in user_text

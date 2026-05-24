@@ -52,6 +52,7 @@ def test_admin_ui_calls_backend_apis_not_storage_directly() -> None:
     for endpoint in (
         "/generations",
         "/credentials",
+        "/mem0/self-hosted/start",
         "/monitoring/summary",
         "/catalogue",
         "/memories/",
@@ -98,6 +99,18 @@ def test_credentials_form_manages_runtime_provider_tokens() -> None:
     source = (ADMIN_UI / "src" / "app.ts").read_text(encoding="utf-8")
 
     for element_id in (
+        "mem0-setup-form",
+        "mem0-setup-api-key",
+        "mem0-setup-host",
+        "mem0-setup-activate",
+        "mem0-selfhost-form",
+        "mem0-selfhost-openai-api-key",
+        "mem0-selfhost-admin-api-key",
+        "mem0-selfhost-jwt-secret",
+        "mem0-selfhost-host",
+        "mem0-selfhost-start",
+        "mem0-selfhost-activate",
+        "mem0-selfhost-result",
         "credential-form",
         "credential-key",
         "credential-value",
@@ -108,6 +121,8 @@ def test_credentials_form_manages_runtime_provider_tokens() -> None:
 
     for credential_key in (
         "mem0_api_key",
+        "mem0_host",
+        "mem0_jwt_secret",
         "openai_api_key",
         "anthropic_api_key",
         "gemini_api_key",
@@ -116,7 +131,10 @@ def test_credentials_form_manages_runtime_provider_tokens() -> None:
         assert credential_key in html
 
     assert "/credentials" in source
+    assert "/mem0/self-hosted/start" in source
     assert "saveRuntimeCredential" in source
+    assert "configureMem0" in source
+    assert "startSelfHostedMem0" in source
     assert "renderCredentials" in source
 
 
@@ -138,6 +156,16 @@ def test_monitoring_view_loads_mem0_and_token_efficiency_state() -> None:
     assert "/monitoring/summary" in source
     assert "renderMonitoring" in source
     assert "updateMonitoringRefresh" in source
+
+
+def test_learning_view_surfaces_run_warnings() -> None:
+    source = (ADMIN_UI / "src" / "app.ts").read_text(encoding="utf-8")
+    styles = (ADMIN_UI / "src" / "styles.css").read_text(encoding="utf-8")
+
+    assert "renderLearningWarnings" in source
+    assert "report.warnings" in source
+    assert "item.warnings" in source
+    assert ".warning-list" in styles
 
 
 def test_admin_ui_requires_token_before_authenticated_requests() -> None:

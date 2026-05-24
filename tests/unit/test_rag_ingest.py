@@ -1,6 +1,9 @@
-"""Unit tests for RAG text chunking logic."""
+"""Unit tests for RAG text chunking logic and CLI main()."""
 
-from totalrecall.testgen.rag.ingest import RagIngestRunner, _chunk_text
+import sys
+from unittest.mock import patch
+
+from totalrecall.testgen.rag.ingest import RagIngestRunner, _chunk_text, main
 from totalrecall.testgen.rag.store import StubRagStore
 
 
@@ -61,3 +64,16 @@ class TestRagIngestRunner:
         runner = RagIngestRunner(CapturingStore(), tenant_id="")
         runner.ingest_file(doc)
         assert all(c.source_ref == "testing_guide.md" for c in ingested)
+
+
+class TestMain:
+    def test_main_ingests_file_and_prints_count(self, tmp_path, capsys):
+        doc = tmp_path / "guide.md"
+        doc.write_text(" ".join(["word"] * 50), encoding="utf-8")
+
+        with patch.object(sys, "argv", ["ingest", "--source", str(doc), "--tenant", "tenant1"]):
+            main()
+
+        captured = capsys.readouterr()
+        assert "Ingested" in captured.out
+        assert str(doc) in captured.out

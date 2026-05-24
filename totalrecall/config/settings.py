@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     )
     feature_flags: dict[str, Any] = Field(
         default_factory=lambda: {
-            "memory.adapter": "stub",
+            "memory.adapter": "mem0_v1",
             "memory.write_enabled": True,
             "memory.fail_open_on_search": True,
             "reformulator.adapter": "keyword",
@@ -41,7 +41,12 @@ class Settings(BaseSettings):
             "tone_check.enabled": False,
         }
     )
-    credential_refs: dict[str, str] = Field(default_factory=dict)
+    credential_refs: dict[str, str] = Field(
+        default_factory=lambda: {
+            "mem0_api_key": "local:mem0_api_key",
+            "mem0_host": "env:MEM0_HOST",
+        }
+    )
     external_credential_base_url: str | None = Field(
         default=None,
         description=(
@@ -52,6 +57,13 @@ class Settings(BaseSettings):
     external_credential_auth_token: str | None = Field(default=None)
     external_credential_timeout_seconds: int = Field(default=5, ge=1)
     skills_dir: Path = Path("skills")
+    learning_path_mappings: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Optional host-to-runtime path mappings for learning scans. "
+            "Example: {\"C:\\\\ENV\": \"/learning-workspace\"}."
+        ),
+    )
     enable_database: bool = True
     cache_ttl_seconds: int = Field(
         default=300,
@@ -84,3 +96,19 @@ class Settings(BaseSettings):
         ),
     )
     playwright_worker_timeout_seconds: int = Field(default=10, ge=1)
+    admin_docker_control_enabled: bool = Field(
+        default=False,
+        description=(
+            "Allows admin-authenticated API requests to run Docker Compose for local "
+            "self-hosted dependencies. Keep disabled outside local developer machines."
+        ),
+    )
+    docker_compose_project_dir: Path = Field(
+        default=Path("."),
+        description="Directory containing docker-compose.yml and docker-compose.mem0.yml.",
+    )
+    docker_compose_command: list[str] = Field(
+        default_factory=lambda: ["docker", "compose"],
+        description="Command used when admin Docker control is enabled.",
+    )
+    docker_control_timeout_seconds: int = Field(default=180, ge=1)

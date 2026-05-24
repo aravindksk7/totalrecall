@@ -6,6 +6,8 @@ from totalrecall.contracts import ContractModel
 
 
 class TestType(StrEnum):
+    __test__ = False  # prevent pytest collection
+
     FUNCTIONAL = "functional"
     NEGATIVE = "negative"
     EDGE_CASE = "edge_case"

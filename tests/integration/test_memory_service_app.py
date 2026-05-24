@@ -36,8 +36,10 @@ def _settings() -> Settings:
 
 
 @pytest.fixture
-def client() -> Generator[TestClient]:
-    with TestClient(create_memory_app(_settings())) as test_client:
+def client(tmp_path) -> Generator[TestClient]:
+    settings = _settings()
+    settings = settings.model_copy(update={"local_secrets_dir": tmp_path / "secrets"})
+    with TestClient(create_memory_app(settings)) as test_client:
         yield test_client
 
 

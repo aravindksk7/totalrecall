@@ -203,7 +203,8 @@ class GenerationOrchestrator:
         # 5. Normalize response.
         # Testgen uses TestCasePackNormalizer; codegen uses ResponseNormalizer.
         test_case_pack = None
-        if intent is not None and self._testgen_normalizer is not None:
+        is_testgen = intent is not None and self._testgen_normalizer is not None
+        if is_testgen:
             jira_key = request.jira_key if hasattr(request, "jira_key") else None
             test_case_pack, norm_errors = self._testgen_normalizer.normalize(
                 provider_response.raw_text, source_jira_key=jira_key
@@ -212,21 +213,23 @@ class GenerationOrchestrator:
         else:
             artifacts, norm_errors = self._normalizer.normalize(provider_response)
 
-        # 6. Validate artifacts if enabled
+        # 6. Validate artifacts if enabled (skipped for testgen — test_case_pack is the output)
         from totalrecall.generation.models import ValidationSummary
 
         skill = (
             self._skills.select(request.target.language, request.target.framework)
-            if request.options.validation_enabled
+            if request.options.validation_enabled and not is_testgen
             else None
         )
         validation = ValidationSummary(status=ValidationStatus.NOT_RUN)
-        if request.options.validation_enabled:
+        if request.options.validation_enabled and not is_testgen:
             validation = self._validator.validate(artifacts, skill)
 
         # 5a. Single-pass repair when validation fails and the caller opted in
+        # Not applicable on the testgen path (ResponseNormalizer cannot parse testcase-pack format).
         if (
-            request.options.allow_repair
+            not is_testgen
+            and request.options.allow_repair
             and validation.status == ValidationStatus.FAILED
             and validation.diagnostics
         ):
@@ -260,11 +263,15 @@ class GenerationOrchestrator:
 
         # 6. Assemble result
         all_errors = norm_errors
-        has_failures = bool(all_errors) or validation.status == ValidationStatus.FAILED
-        if has_failures and not artifacts:
-            status = GenerationStatus.FAILED
+        if is_testgen:
+            # Testgen success is measured by whether the pack normalizer produced a valid pack.
+            status = GenerationStatus.COMPLETED if not all_errors else GenerationStatus.FAILED
         else:
-            status = GenerationStatus.COMPLETED
+            has_failures = bool(all_errors) or validation.status == ValidationStatus.FAILED
+            if has_failures and not artifacts:
+                status = GenerationStatus.FAILED
+            else:
+                status = GenerationStatus.COMPLETED
         excluded_memory_count = sum(
             1
             for exclusion in plan.excluded

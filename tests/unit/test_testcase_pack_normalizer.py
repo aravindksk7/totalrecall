@@ -95,3 +95,36 @@ class TestTestCasePackNormalizer:
         assert len(pack.test_cases) == 1
         assert pack.test_cases[0].id == "TC-001"
         assert pack.test_cases[0].title == "Login with valid credentials"
+
+    def test_unknown_top_level_keys_log_warning_and_fail_validation(self):
+        import json
+        from totalrecall.errors import ServiceErrorCode
+
+        data = json.loads(_valid_pack_json())
+        data["unexpected_field"] = "some_value"
+        norm = TestCasePackNormalizer()
+        pack, errors = norm.normalize(json.dumps(data))
+        # pydantic extra="forbid" rejects unknown fields — pack is None but the warning path was reached
+        assert pack is None
+        assert any(e.code == ServiceErrorCode.NORMALIZATION_FAILED for e in errors)
+
+    def test_pydantic_validation_failure_returns_error(self):
+        import json
+        from totalrecall.errors import ServiceErrorCode
+
+        data = {
+            "story_summary": "A story",
+            "test_cases": [
+                {
+                    "id": "",  # min_length=1 — will fail pydantic validation
+                    "type": "functional",
+                    "title": "A test",
+                    "steps": ["step 1"],
+                    "expected_result": "passes",
+                }
+            ],
+        }
+        norm = TestCasePackNormalizer()
+        pack, errors = norm.normalize(json.dumps(data))
+        assert pack is None
+        assert any(e.code == ServiceErrorCode.NORMALIZATION_FAILED for e in errors)

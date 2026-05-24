@@ -42,6 +42,7 @@ class MemoryOperationStats(ContractModel):
 
 class Mem0MonitorStatus(ContractModel):
     credential_configured: bool
+    host_configured: bool
     active: bool
     sdk_available: bool
     status: str
@@ -139,6 +140,7 @@ def _memory_snapshot(
         operations=MemoryOperationStats(**wrapper.operation_stats()),
         mem0=Mem0MonitorStatus(
             credential_configured=_credential_configured(store, "mem0_api_key"),
+            host_configured=_credential_configured(store, "mem0_host"),
             active=mem0_active,
             sdk_available=find_spec("mem0") is not None,
             status=mem0_status,

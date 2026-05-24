@@ -10,6 +10,7 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --no-dev --frozen --no-install-project
 
 COPY docker ./docker
+COPY .env.example docker-compose.mem0.yml ./
 COPY totalrecall ./totalrecall
 COPY migrations ./migrations
 COPY skills ./skills

@@ -246,6 +246,78 @@ async function saveRuntimeCredential(event) {
         ? `Saved ${credentialKey} and applied runtime defaults.`
         : `Saved ${credentialKey}.`);
 }
+async function configureMem0(event) {
+    event.preventDefault();
+    saveConnection();
+    const apiKey = getInput("mem0-setup-api-key").value.trim();
+    const host = getInput("mem0-setup-host").value.trim().replace(/\/$/, "");
+    const activate = getInput("mem0-setup-activate").checked;
+    if (!apiKey) {
+        throw new Error("Mem0 API key is required.");
+    }
+    if (host) {
+        await apiFetch("/credentials/mem0_host", {
+            method: "PUT",
+            body: JSON.stringify({ value: host, activate: false }),
+        });
+    }
+    else {
+        await apiFetch("/credentials/mem0_host", {
+            method: "DELETE",
+        });
+    }
+    const result = await apiFetch("/credentials/mem0_api_key", {
+        method: "PUT",
+        body: JSON.stringify({ value: apiKey, activate }),
+    });
+    getInput("mem0-setup-api-key").value = "";
+    await loadCredentials();
+    setStatus(result.activated
+        ? "Configured Mem0 and activated runtime memory defaults."
+        : "Configured Mem0 credentials.");
+}
+async function startSelfHostedMem0(event) {
+    event.preventDefault();
+    saveConnection();
+    const openaiApiKey = getInput("mem0-selfhost-openai-api-key").value.trim();
+    const mem0AdminApiKey = getInput("mem0-selfhost-admin-api-key").value.trim();
+    const mem0JwtSecret = getInput("mem0-selfhost-jwt-secret").value.trim();
+    const mem0Host = getInput("mem0-selfhost-host").value.trim().replace(/\/$/, "");
+    const startContainers = getInput("mem0-selfhost-start").checked;
+    const activate = getInput("mem0-selfhost-activate").checked;
+    if (!openaiApiKey || !mem0AdminApiKey || !mem0JwtSecret || !mem0Host) {
+        throw new Error("All self-hosted Mem0 fields are required.");
+    }
+    const result = await apiFetch("/mem0/self-hosted/start", {
+        method: "POST",
+        body: JSON.stringify({
+            openai_api_key: openaiApiKey,
+            mem0_admin_api_key: mem0AdminApiKey,
+            mem0_jwt_secret: mem0JwtSecret,
+            mem0_host: mem0Host,
+            start_containers: startContainers,
+            activate,
+        }),
+    });
+    getInput("mem0-selfhost-openai-api-key").value = "";
+    getInput("mem0-selfhost-admin-api-key").value = "";
+    getInput("mem0-selfhost-jwt-secret").value = "";
+    renderSelfHostedMem0Result(result);
+    await loadCredentials();
+    setStatus(result.message, result.start_status === "failed" ? "error" : "ok");
+}
+function renderSelfHostedMem0Result(result) {
+    $("mem0-selfhost-result").innerHTML = `
+    <dl class="result-summary">
+      <div><dt>Status</dt><dd>${statusPill(result.start_status)}</dd></div>
+      <div><dt>Started</dt><dd>${result.started ? "Yes" : "No"}</dd></div>
+      <div><dt>Mem0 host</dt><dd>${escapeHtml(result.mem0_host)}</dd></div>
+      <div><dt>Env file</dt><dd>${escapeHtml(result.env_file)}</dd></div>
+    </dl>
+    <p class="muted">${escapeHtml(result.message)}</p>
+    <pre>${escapeHtml(result.command.join(" "))}</pre>
+  `;
+}
 function renderCredentials(credentials) {
     const body = $("credential-results");
     if (credentials.length === 0) {
@@ -345,6 +417,7 @@ function renderMonitoring(summary) {
         configured_adapter: memory.configured_adapter,
         degraded: memory.health.degraded,
         mem0_credential_configured: memory.mem0.credential_configured,
+        mem0_host_configured: memory.mem0.host_configured,
         mem0_sdk_available: memory.mem0.sdk_available,
         memory_write_enabled: memory.mem0.write_enabled,
         memory_fail_open_on_search: memory.mem0.fail_open_on_search,
@@ -533,10 +606,11 @@ function renderLearningRuns(runs) {
           <div class="run-header">
             <div>
               <h3>${escapeHtml(report.run.run_id)}</h3>
-              <p>${escapeHtml(report.run.status)} - ${escapeHtml(report.discovered_count)} discovered</p>
+              <p>${statusPill(report.run.status)} ${escapeHtml(report.discovered_count)} discovered</p>
             </div>
             <span class="badge">${escapeHtml(report.run.trigger_type)}</span>
           </div>
+          ${renderLearningWarnings(report.warnings)}
           <div class="discovery-list">
             ${report.run.discoveries.map((item) => renderDiscovery(report.run.run_id, item)).join("")}
           </div>
@@ -554,6 +628,16 @@ function renderLearningRuns(runs) {
         });
     });
 }
+function renderLearningWarnings(warnings) {
+    if (warnings.length === 0) {
+        return "";
+    }
+    return `
+    <div class="warning-list">
+      ${warnings.map((warning) => `<p>${escapeHtml(warning)}</p>`).join("")}
+    </div>
+  `;
+}
 function renderDiscovery(runId, item) {
     const disabled = item.status !== "discovered" ? "disabled" : "";
     return `
@@ -561,6 +645,7 @@ function renderDiscovery(runId, item) {
       <strong>${escapeHtml(item.discovery_id)} - ${escapeHtml(item.discovery_type)}</strong>
       <span>${escapeHtml(item.summary)}</span>
       <span class="muted">Status: ${escapeHtml(item.status)} | Delta: ${escapeHtml(item.delta.state)} | Confidence: ${escapeHtml(item.confidence)}</span>
+      ${renderLearningWarnings(item.warnings)}
       <div class="action-row">
         <button type="button" class="secondary-button" data-learning-action="approve" data-run-id="${escapeHtml(runId)}" data-discovery-id="${escapeHtml(item.discovery_id)}" ${disabled}>Approve</button>
         <button type="button" data-learning-action="reject" data-run-id="${escapeHtml(runId)}" data-discovery-id="${escapeHtml(item.discovery_id)}" ${disabled}>Reject</button>
@@ -575,6 +660,114 @@ async function decideDiscovery(runId, discoveryId, action) {
         body: JSON.stringify({ reason: reason || null }),
     });
     await loadLearningRuns();
+}
+// --- Discovery search and bulk actions ---
+async function searchDiscoveries(event) {
+    event.preventDefault();
+    saveConnection();
+    const q = getInput("discovery-search-q").value.trim();
+    const status = getSelect("discovery-search-status").value;
+    const discoveryType = getSelect("discovery-search-type").value;
+    const confidenceRaw = getInput("discovery-search-confidence").value.trim();
+    const limit = getInput("discovery-search-limit").value || "50";
+    const params = paramsFrom({
+        ...(q ? { q } : {}),
+        ...(status ? { status } : {}),
+        ...(discoveryType ? { discovery_type: discoveryType } : {}),
+        ...(confidenceRaw ? { confidence_min: confidenceRaw } : {}),
+        limit,
+    });
+    const results = await apiFetch(`/learning/discoveries${params}`);
+    renderDiscoverySearchResults(results);
+    setStatus(`Found ${results.length} discoveries.`);
+}
+function renderDiscoverySearchResults(results) {
+    const container = $("discovery-search-results");
+    const bulkBar = document.getElementById("discovery-bulk-bar");
+    if (results.length === 0) {
+        container.innerHTML = '<p class="muted">No discoveries matched the search.</p>';
+        bulkBar.hidden = true;
+        return;
+    }
+    container.innerHTML = `
+    <table class="discovery-table">
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="discovery-check-all" /></th>
+          <th>Summary</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Delta</th>
+          <th>Confidence</th>
+          <th>Run</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${results
+        .map((item) => `
+          <tr>
+            <td><input type="checkbox" class="discovery-check" value="${escapeHtml(item.discovery_id)}" data-run-id="${escapeHtml(item.run_id)}" ${item.status !== "discovered" ? "disabled" : ""} /></td>
+            <td title="${escapeHtml(item.discovery_id)}">${escapeHtml(item.summary)}</td>
+            <td>${escapeHtml(item.discovery_type)}</td>
+            <td>${statusPill(item.status)}</td>
+            <td>${escapeHtml(item.delta_state)}</td>
+            <td>${escapeHtml(item.confidence.toFixed(2))}</td>
+            <td class="run-id-cell" title="${escapeHtml(item.run_id)}">${escapeHtml(item.run_id.slice(0, 8))}…</td>
+            <td>
+              <button type="button" class="secondary-button btn-sm" data-learning-action="approve" data-run-id="${escapeHtml(item.run_id)}" data-discovery-id="${escapeHtml(item.discovery_id)}" ${item.status !== "discovered" ? "disabled" : ""}>Approve</button>
+              <button type="button" class="btn-sm" data-learning-action="reject" data-run-id="${escapeHtml(item.run_id)}" data-discovery-id="${escapeHtml(item.discovery_id)}" ${item.status !== "discovered" ? "disabled" : ""}>Reject</button>
+            </td>
+          </tr>`)
+        .join("")}
+      </tbody>
+    </table>
+  `;
+    bulkBar.hidden = false;
+    updateBulkSelectedCount();
+    container.querySelectorAll("[data-learning-action]").forEach((button) => {
+        button.addEventListener("click", () => {
+            const action = button.dataset.learningAction;
+            const runId = button.dataset.runId;
+            const discoveryId = button.dataset.discoveryId;
+            if (action && runId && discoveryId) {
+                void decideDiscovery(runId, discoveryId, action).then(() => void searchDiscoveries(new SubmitEvent("submit")));
+            }
+        });
+    });
+    const checkAll = document.getElementById("discovery-check-all");
+    checkAll.addEventListener("change", () => {
+        container.querySelectorAll(".discovery-check:not(:disabled)").forEach((cb) => {
+            cb.checked = checkAll.checked;
+        });
+        updateBulkSelectedCount();
+    });
+    container.querySelectorAll(".discovery-check").forEach((cb) => {
+        cb.addEventListener("change", updateBulkSelectedCount);
+    });
+}
+function updateBulkSelectedCount() {
+    const checked = document.querySelectorAll(".discovery-check:checked").length;
+    const countEl = document.getElementById("discovery-selected-count");
+    if (countEl)
+        countEl.textContent = `${checked} selected`;
+}
+function selectedDiscoveryIds() {
+    return Array.from(document.querySelectorAll(".discovery-check:checked")).map((cb) => cb.value);
+}
+async function bulkDecideDiscoveries(action) {
+    const ids = selectedDiscoveryIds();
+    if (ids.length === 0) {
+        setStatus("No discoveries selected.", "error");
+        return;
+    }
+    const reason = window.prompt(`${action === "bulk-approve" ? "Approve" : "Reject"} ${ids.length} discoveries — reason (optional):`) ?? "";
+    const result = await apiFetch(`/learning/discoveries/${action}`, {
+        method: "POST",
+        body: JSON.stringify({ discovery_ids: ids, reason: reason || null }),
+    });
+    setStatus(`${action}: ${result.processed} processed, ${result.skipped} skipped.`);
+    void searchDiscoveries(new SubmitEvent("submit"));
 }
 async function loadFlagsAndMetrics() {
     saveConnection();
@@ -643,6 +836,8 @@ function bind() {
     $("refresh-active").addEventListener("click", () => void refreshActive());
     $("generation-form").addEventListener("submit", (event) => void generateFromPrompt(event).catch((error) => setStatus(String(error), "error")));
     $("credential-form").addEventListener("submit", (event) => void saveRuntimeCredential(event).catch((error) => setStatus(String(error), "error")));
+    $("mem0-setup-form").addEventListener("submit", (event) => void configureMem0(event).catch((error) => setStatus(String(error), "error")));
+    $("mem0-selfhost-form").addEventListener("submit", (event) => void startSelfHostedMem0(event).catch((error) => setStatus(String(error), "error")));
     $("load-credentials").addEventListener("click", () => void loadCredentials().catch((error) => setStatus(String(error), "error")));
     $("load-monitoring").addEventListener("click", () => void loadMonitoring().catch((error) => setStatus(String(error), "error")));
     $("monitoring-refresh-interval").addEventListener("change", updateMonitoringRefresh);
@@ -650,12 +845,33 @@ function bind() {
         event.preventDefault();
         void refreshActive();
     });
-    $("memory-delete-form").addEventListener("submit", (event) => void deleteMemory(event));
+    $("memory-delete-form").addEventListener("submit", (event) => void deleteMemory(event).catch((error) => setStatus(String(error), "error")));
     $("learning-list-form").addEventListener("submit", (event) => {
         event.preventDefault();
         void loadLearningRuns().catch((error) => setStatus(String(error), "error"));
     });
     $("learning-trigger-form").addEventListener("submit", (event) => void triggerLearningRun(event).catch((error) => setStatus(String(error), "error")));
+    $("discovery-search-form").addEventListener("submit", (event) => void searchDiscoveries(event).catch((error) => setStatus(String(error), "error")));
+    $("discovery-select-all").addEventListener("click", () => {
+        document.querySelectorAll(".discovery-check:not(:disabled)").forEach((cb) => {
+            cb.checked = true;
+        });
+        const checkAll = document.getElementById("discovery-check-all");
+        if (checkAll)
+            checkAll.checked = true;
+        updateBulkSelectedCount();
+    });
+    $("discovery-deselect-all").addEventListener("click", () => {
+        document.querySelectorAll(".discovery-check").forEach((cb) => {
+            cb.checked = false;
+        });
+        const checkAll = document.getElementById("discovery-check-all");
+        if (checkAll)
+            checkAll.checked = false;
+        updateBulkSelectedCount();
+    });
+    $("discovery-bulk-approve").addEventListener("click", () => void bulkDecideDiscoveries("bulk-approve").catch((error) => setStatus(String(error), "error")));
+    $("discovery-bulk-reject").addEventListener("click", () => void bulkDecideDiscoveries("bulk-reject").catch((error) => setStatus(String(error), "error")));
     $("load-flags").addEventListener("click", () => void loadFlagsAndMetrics().catch((error) => setStatus(String(error), "error")));
     ["memory-entity-id", "memory-application-id", "memory-confirm"].forEach((id) => {
         $(id).addEventListener("input", updateMemoryDeleteState);

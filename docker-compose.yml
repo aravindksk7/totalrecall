@@ -3,6 +3,10 @@ x-totalrecall-env: &totalrecall-env
   TOTALRECALL_DATABASE_URL: postgresql://totalrecall:totalrecall@postgres:5432/totalrecall
   TOTALRECALL_AUTH_TOKENS: '{"dev-token":{"tenant_id":"tenant_dev","actor_id":"dev-user","roles":["admin"]}}'
   TOTALRECALL_FEATURE_FLAGS: '{"memory.adapter":"stub","memory.write_enabled":true,"memory.fail_open_on_search":true}'
+  TOTALRECALL_LEARNING_PATH_MAPPINGS: ${TOTALRECALL_LEARNING_PATH_MAPPINGS:-{}}
+  TOTALRECALL_ADMIN_DOCKER_CONTROL_ENABLED: ${TOTALRECALL_ADMIN_DOCKER_CONTROL_ENABLED:-false}
+  TOTALRECALL_DOCKER_COMPOSE_PROJECT_DIR: ${TOTALRECALL_DOCKER_COMPOSE_PROJECT_DIR:-/app}
+  TOTALRECALL_DOCKER_CONTROL_TIMEOUT_SECONDS: ${TOTALRECALL_DOCKER_CONTROL_TIMEOUT_SECONDS:-180}
 
 services:
   postgres:
@@ -49,6 +53,7 @@ services:
       - "8000:8000"
     volumes:
       - ./local-secrets:/app/local-secrets
+      - ${TOTALRECALL_LEARNING_WORKSPACE_HOST:-./learning-workspace}:/learning-workspace:ro
     command: ["api"]
 
   memory-wrapper:
@@ -65,6 +70,7 @@ services:
       - "8001:8001"
     volumes:
       - ./local-secrets:/app/local-secrets
+      - ${TOTALRECALL_LEARNING_WORKSPACE_HOST:-./learning-workspace}:/learning-workspace:ro
     command: ["memory-wrapper"]
 
   admin-ui:

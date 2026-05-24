@@ -23,6 +23,7 @@ class TraceabilityEntry(ContractModel):
 
 
 class TestCasePack(ContractModel):
+    __test__ = False  # prevent pytest collection
     story_summary: str = Field(min_length=1)
     assumptions: list[str] = Field(default_factory=list)
     test_cases: list[TestCase] = Field(default_factory=list)
